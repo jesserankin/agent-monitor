@@ -14,7 +14,9 @@ from textual.widgets import DataTable, Footer, Header
 from textual.worker import Worker, WorkerState
 
 from agent_monitor.hyprland import HyprlandMonitor, get_event_socket_path
-from agent_monitor.models import AgentSession, AgentState
+from agent_monitor.models import BRAILLE_SPINNER_CHARS, AgentSession, AgentState
+
+SPINNER_FRAMES = list(BRAILLE_SPINNER_CHARS)  # [⠂, ⠐]
 from agent_monitor.statusline import StatuslineWatcher
 from agent_monitor.workspace import focus_window, switch_to_group
 
@@ -80,6 +82,7 @@ class AgentMonitorApp(App):
         self._statusline_data: dict[str, dict] = {}
         self._statusline_columns_added: bool = False
         self._group_col_key = None
+        self._spinner_frame: int = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -119,6 +122,7 @@ class AgentMonitorApp(App):
 
         self._start_monitor()
         self.set_interval(5.0, self._full_refresh)
+        self.set_interval(0.48, self._tick_spinners)
         self._update_subtitle()
 
     def _start_monitor(self) -> None:
@@ -149,6 +153,20 @@ class AgentMonitorApp(App):
 
         self._watcher = StatuslineWatcher(on_update=on_statusline_update)
         await self._watcher.watch()
+
+    def _tick_spinners(self) -> None:
+        """Animate spinner for all ACTIVE sessions."""
+        self._spinner_frame = (self._spinner_frame + 1) % len(SPINNER_FRAMES)
+        char = SPINNER_FRAMES[self._spinner_frame]
+        table = self.query_one(DataTable)
+        status_col = 2  # Group, Session, Status
+
+        for addr, session in self._sessions.items():
+            if session.state == AgentState.ACTIVE and addr in table.rows:
+                table.update_cell_at(
+                    (table.get_row_index(addr), status_col),
+                    Text(char, style="green"),
+                )
 
     async def _full_refresh(self) -> None:
         """Periodic full refresh via hyprctl clients."""
@@ -251,7 +269,7 @@ class AgentMonitorApp(App):
         if session.state == AgentState.ATTENTION:
             status = Text("\U0001f514", style="bold yellow")
         elif session.state == AgentState.ACTIVE:
-            status = Text("\u2810", style="green")
+            status = Text(SPINNER_FRAMES[self._spinner_frame], style="green")
         else:
             status = Text("\u2733", style="dim")
 

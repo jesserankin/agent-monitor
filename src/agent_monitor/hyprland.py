@@ -276,6 +276,7 @@ class HyprlandMonitor:
                 state=parsed["state"],
                 workspace_id=workspace_id,
                 window_class=window_class,
+                status_char=parsed["status_char"],
                 pid=pid,
             )
 
@@ -329,6 +330,7 @@ class HyprlandMonitor:
             session.session_name = parsed["session_name"]
             session.task_description = parsed["task_description"]
             session.state = parsed["state"]
+            session.status_char = parsed["status_char"]
         else:
             # Create new session
             self.sessions[addr] = AgentSession(
@@ -338,6 +340,7 @@ class HyprlandMonitor:
                 state=parsed["state"],
                 workspace_id=workspace_id,
                 window_class=window_class,
+                status_char=parsed["status_char"],
                 pid=meta.get("pid"),
             )
 
@@ -368,6 +371,7 @@ class HyprlandMonitor:
             state=parsed["state"],
             workspace_id=workspace_id,
             window_class=window_class,
+            status_char=parsed["status_char"],
             pid=None,
         )
 

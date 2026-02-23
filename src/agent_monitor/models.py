@@ -35,6 +35,7 @@ class AgentSession:
     state: AgentState
     workspace_id: int
     window_class: str
+    status_char: str = "\u2733"
     workspace_group: int = field(init=False)
     pid: int | None = None
     cost_usd: float | None = None
@@ -89,4 +90,5 @@ def parse_window_title(title: str, window_class: str) -> dict | None:
         "state": state,
         "task_description": task_description,
         "has_attention": has_attention,
+        "status_char": status_char,
     }
