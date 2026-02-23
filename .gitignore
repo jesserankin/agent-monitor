@@ -6,3 +6,4 @@ dist/
 .claude/hooks/
 .claude/commands/
 .claude/settings.local.json
+.codex-review/

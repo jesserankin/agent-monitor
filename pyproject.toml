@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "textual-dev>=1.0.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "textual-dev>=1.0.0"]
 
 [project.scripts]
 agent-monitor = "agent_monitor.app:main"

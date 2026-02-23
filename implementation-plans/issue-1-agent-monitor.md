@@ -156,7 +156,7 @@ Test cases:
 
 ---
 
-## Phase 3: Hyprland Integration (`src/agent_monitor/hyprland.py`)
+## Phase 3: Hyprland Integration (`src/agent_monitor/hyprland.py`) ✅
 
 ### Step 3.1: Socket path discovery
 
