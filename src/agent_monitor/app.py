@@ -121,7 +121,7 @@ class AgentMonitorApp(App):
             logger.warning("workspace-group not found on PATH; workspace switching disabled")
 
         self._start_monitor()
-        self.set_interval(5.0, self._full_refresh)
+        self.set_interval(2.0, self._full_refresh)
         self.set_interval(0.48, self._tick_spinners)
         self._update_subtitle()
 
@@ -165,7 +165,7 @@ class AgentMonitorApp(App):
             if session.state == AgentState.ACTIVE and addr in table.rows:
                 table.update_cell_at(
                     (table.get_row_index(addr), status_col),
-                    Text(char, style="green"),
+                    Text(char, style="dark_orange"),
                 )
 
     async def _full_refresh(self) -> None:
@@ -268,16 +268,26 @@ class AgentMonitorApp(App):
 
         if session.state == AgentState.ATTENTION:
             status = Text("\U0001f514", style="bold yellow")
+            name = Text(session.session_name, style="bold yellow")
+            task_text = session.task_description
+            task_style = "bold"
         elif session.state == AgentState.ACTIVE:
-            status = Text(SPINNER_FRAMES[self._spinner_frame], style="green")
+            status = Text(SPINNER_FRAMES[self._spinner_frame], style="dark_orange")
+            name = Text(session.session_name, style="dim")
+            task_text = session.task_description
+            task_style = "dim"
         else:
-            status = Text("\u2733", style="dim")
+            status = Text("\u2733", style="")
+            name = Text(session.session_name)
+            task_text = session.task_description
+            task_style = ""
 
-        task = session.task_description
-        if len(task) > 60:
-            task = task[:57] + "..."
+        if len(task_text) > 60:
+            task_text = task_text[:57] + "..."
 
-        base = (group, session.session_name, status, task)
+        task_styled = Text(task_text, style=task_style)
+
+        base = (group, name, status, task_styled)
 
         if self._statusline_columns_added:
             cost = f"${session.cost_usd:.2f}" if session.cost_usd is not None else ""
