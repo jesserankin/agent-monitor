@@ -217,6 +217,11 @@ class HyprlandMonitor:
         self._populate_from_clients(clients)
         self._log.info("Initial state: %d sessions from %d windows", len(self.sessions), len(self._window_meta))
 
+        # Notify about all initial sessions
+        if self.on_session_update:
+            for session in self.sessions.values():
+                await self.on_session_update(session)
+
         socket_path = get_event_socket_path()
         await listen_events(socket_path, self._dispatch_event)
 
