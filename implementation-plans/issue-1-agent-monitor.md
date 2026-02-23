@@ -254,7 +254,7 @@ async def watch(self):
 
 ---
 
-## Phase 5: Workspace Switching (`src/agent_monitor/workspace.py`)
+## Phase 5: Workspace Switching (`src/agent_monitor/workspace.py`) ✅
 
 ### Step 5.1: switch_to_group function
 
