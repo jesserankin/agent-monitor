@@ -211,7 +211,7 @@ Methods:
 
 ---
 
-## Phase 4: Statusline File Watcher (`src/agent_monitor/statusline.py`)
+## Phase 4: Statusline File Watcher (`src/agent_monitor/statusline.py`) ✅
 
 ### Step 4.1: StatuslineWatcher class
 
@@ -275,7 +275,7 @@ pattern as `switch_to_group`).
 
 ---
 
-## Phase 6: TUI Application (`src/agent_monitor/app.py` + `monitor.tcss`)
+## Phase 6: TUI Application (`src/agent_monitor/app.py` + `monitor.tcss`) — Steps 6.1-6.9 ✅
 
 ### Step 6.1: AgentMonitorApp class (Textual App)
 
