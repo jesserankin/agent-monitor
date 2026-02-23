@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.egg-info/
+dist/
+.dev_tools/
+.claude/hooks/
+.claude/commands/
+.claude/settings.local.json

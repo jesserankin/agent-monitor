@@ -1,0 +1,19 @@
+[project]
+name = "agent-monitor"
+version = "0.1.0"
+description = "TUI dashboard for monitoring Claude Code instances across Hyprland workspaces"
+requires-python = ">=3.12"
+dependencies = [
+    "textual>=1.0.0",
+    "watchfiles>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "textual-dev>=1.0.0"]
+
+[project.scripts]
+agent-monitor = "agent_monitor.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
