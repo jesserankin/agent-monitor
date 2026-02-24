@@ -414,7 +414,7 @@ Keep it minimal — Textual's default theme handles most of it.
 
 ---
 
-## Phase 7: Statusline Sidecar Script (`scripts/statusline-sidecar.sh`)
+## Phase 7: Statusline Sidecar Script (`scripts/statusline-sidecar.sh`) ✅
 
 ### Step 7.1: Write the script
 
@@ -449,7 +449,7 @@ echo '{"session_id":"test","model":{"display_name":"Opus"},"context_window":{"us
 
 ---
 
-## Phase 8: Entry Point and Packaging
+## Phase 8: Entry Point and Packaging ✅
 
 ### Step 8.1: Main entry point
 
@@ -470,7 +470,7 @@ agent-monitor
 
 ---
 
-## Phase 9: Integration Testing
+## Phase 9: Integration Testing ✅
 
 ### Step 9.1: Manual end-to-end test
 
@@ -503,6 +503,22 @@ On app startup, verify prerequisites with clear behavior per tool:
 | Hyprland event socket | **Hard requirement** | Exit with error: "Cannot find Hyprland event socket" |
 | `workspace-group` | **Soft requirement** | Warn on startup; disable workspace switching (Enter key shows "workspace-group not found" notification) |
 | `jq` | **Not checked** | Only needed by sidecar script, not the monitor app itself |
+
+### Manual E2E Verification Checklist
+
+To be completed in a live Hyprland environment:
+
+- [ ] Startup with `hyprctl` available — sessions populate in table
+- [ ] Startup without `hyprctl` — exits with clear error message
+- [ ] Startup without event socket — exits with clear error message
+- [ ] Startup without `workspace-group` — warns, disables workspace switching
+- [ ] Live session discovery/update/removal via Hyprland events
+- [ ] Enter key switches workspace group and focuses target window
+- [ ] Sidecar JSON updates show dynamic Cost/Context/Model columns
+- [ ] Sidecar file deletion doesn't leave stale UI state
+- [ ] Periodic refresh catches missed events
+- [ ] `python -m agent_monitor` launches the TUI
+- [ ] `agent-monitor` CLI entry point launches the TUI
 
 ---
 
