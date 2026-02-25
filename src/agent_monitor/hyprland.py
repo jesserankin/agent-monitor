@@ -9,6 +9,11 @@ import os
 from collections.abc import Awaitable, Callable
 
 from agent_monitor.models import AgentSession, AgentState, parse_window_title
+from agent_monitor.procfs import (
+    _build_zellij_socket_map,
+    find_claude_processes,
+    find_zellij_session_for_terminal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +61,9 @@ def parse_event_line(line: str) -> dict | None:
 
     elif event_name == "closewindow":
         return {"event": "closewindow", "address": data}
+
+    elif event_name == "activewindowv2":
+        return {"event": "activewindowv2", "address": data}
 
     elif event_name == "movewindowv2":
         parts = data.split(",", 2)
@@ -141,6 +149,45 @@ async def fetch_clients() -> list[dict]:
         return []
 
 
+async def fetch_active_window() -> str | None:
+    """Fetch the currently focused window address via hyprctl activewindow -j.
+
+    Returns normalized address, or None on failure/timeout.
+    """
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "hyprctl", "activewindow", "-j",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+    except asyncio.TimeoutError:
+        logger.warning("hyprctl activewindow timed out")
+        if proc is not None:
+            proc.kill()
+            await proc.communicate()
+        return None
+    except FileNotFoundError:
+        logger.warning("hyprctl not found on PATH")
+        return None
+
+    if proc.returncode != 0:
+        logger.warning("hyprctl activewindow exited with code %d", proc.returncode)
+        return None
+
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError:
+        logger.warning("Failed to parse hyprctl activewindow JSON output")
+        return None
+
+    address = data.get("address", "")
+    if not address:
+        return None
+    return normalize_address(address)
+
+
 async def listen_events(
     socket_path: str,
     callback: Callable[[dict], Awaitable[None]],
@@ -207,6 +254,7 @@ class HyprlandMonitor:
     ) -> None:
         self.sessions: dict[str, AgentSession] = {}
         self._window_meta: dict[str, dict] = {}
+        self._focused_address: str | None = None
         self.on_session_update = on_session_update
         self.on_session_remove = on_session_remove
         self._log = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
@@ -215,6 +263,14 @@ class HyprlandMonitor:
         """Fetch initial state, then listen for events."""
         clients = await fetch_clients()
         self._populate_from_clients(clients)
+
+        # Set initial focus
+        active_addr = await fetch_active_window()
+        if active_addr:
+            self._focused_address = active_addr
+            if active_addr in self.sessions:
+                self.sessions[active_addr].is_focused = True
+
         self._log.info("Initial state: %d sessions from %d windows", len(self.sessions), len(self._window_meta))
 
         # Notify about all initial sessions
@@ -228,13 +284,25 @@ class HyprlandMonitor:
     async def refresh(self) -> None:
         """Re-fetch all clients via hyprctl for periodic full sync."""
         clients = await fetch_clients()
+        old_sessions = dict(self.sessions)
         old_addresses = set(self.sessions.keys())
         self._window_meta.clear()
         self.sessions.clear()
         self._populate_from_clients(clients)
+
+        # Carry over sessions whose windows still exist but titles
+        # no longer match (e.g., Zellij pane switched away from Claude)
+        for addr, session in old_sessions.items():
+            if addr not in self.sessions and addr in self._window_meta:
+                self.sessions[addr] = session
+
         new_addresses = set(self.sessions.keys())
 
-        # Notify about removed sessions
+        # Reapply focus based on tracked address
+        if self._focused_address and self._focused_address in self.sessions:
+            self.sessions[self._focused_address].is_focused = True
+
+        # Notify about removed sessions (window truly gone)
         for addr in old_addresses - new_addresses:
             if self.on_session_remove:
                 await self.on_session_remove(addr)
@@ -280,12 +348,67 @@ class HyprlandMonitor:
                 pid=pid,
             )
 
+        self._resolve_session_cwds()
+
+    def _resolve_session_cwds(self) -> None:
+        """Resolve CWDs for sessions by correlating terminal PIDs with Claude processes.
+
+        1. Build zellij socket map once (via ss + /proc/net/unix).
+        2. For each session's terminal PID, find its Zellij session name.
+        3. Find all Claude processes and their CWDs + Zellij session names.
+        4. Match sessions to Claude CWDs via shared Zellij session name.
+        """
+        # Step 0: Build socket map once for all lookups
+        socket_map = _build_zellij_socket_map()
+
+        # Step 1: Map session address → zellij session name
+        addr_to_zellij: dict[str, str] = {}
+        for addr, session in self.sessions.items():
+            pid = session.pid
+            if pid is None:
+                continue
+            zellij_name = find_zellij_session_for_terminal(pid, socket_map=socket_map)
+            if zellij_name:
+                addr_to_zellij[addr] = zellij_name
+
+        if not addr_to_zellij:
+            return
+
+        # Step 2: Find all Claude processes → {zellij_session_name: [cwd, ...]}
+        claude_procs = find_claude_processes()
+        zellij_to_cwds: dict[str, list[str]] = {}
+        for proc in claude_procs:
+            zname = proc.get("zellij_session_name")
+            cwd = proc.get("cwd")
+            if zname and cwd:
+                zellij_to_cwds.setdefault(zname, []).append(cwd)
+
+        # Step 3: Assign CWDs to sessions
+        for addr, zellij_name in addr_to_zellij.items():
+            cwds = zellij_to_cwds.get(zellij_name, [])
+            if len(cwds) == 1:
+                self.sessions[addr].cwd = os.path.basename(cwds[0])
+            elif len(cwds) > 1:
+                # Multiple Claude instances in same zellij session —
+                # assign first unmatched CWD
+                assigned = {s.cwd for s in self.sessions.values() if s.cwd}
+                for cwd in cwds:
+                    base = os.path.basename(cwd)
+                    if base not in assigned:
+                        self.sessions[addr].cwd = base
+                        break
+
     async def _dispatch_event(self, event: dict) -> None:
         """Route a parsed event to the appropriate handler."""
+        name = event["event"]
+
+        if name == "activewindowv2":
+            await self._handle_focus_change(event["address"])
+            return
+
         addr = normalize_address(event.get("address", ""))
         had_session = addr in self.sessions
 
-        name = event["event"]
         if name == "windowtitlev2":
             self._handle_title_change(event["address"], event["title"])
         elif name == "openwindow":
@@ -305,6 +428,24 @@ class HyprlandMonitor:
             if self.on_session_update:
                 await self.on_session_update(self.sessions[addr])
 
+    async def _handle_focus_change(self, address: str) -> None:
+        """Handle activewindowv2 event — update focused session."""
+        addr = normalize_address(address)
+        old_addr = self._focused_address
+        self._focused_address = addr
+
+        # Clear old focus
+        if old_addr and old_addr in self.sessions:
+            self.sessions[old_addr].is_focused = False
+            if self.on_session_update:
+                await self.on_session_update(self.sessions[old_addr])
+
+        # Set new focus
+        if addr in self.sessions:
+            self.sessions[addr].is_focused = True
+            if self.on_session_update:
+                await self.on_session_update(self.sessions[addr])
+
     def _handle_title_change(self, address: str, title: str) -> None:
         """Handle windowtitlev2 event — update/create/remove session."""
         addr = normalize_address(address)
@@ -317,8 +458,8 @@ class HyprlandMonitor:
         parsed = parse_window_title(title, window_class)
 
         if parsed is None:
-            # Title no longer matches Claude — remove session if it existed
-            self.sessions.pop(addr, None)
+            # Title no longer matches Claude — keep existing session
+            # (e.g., Zellij pane switched away from the Claude pane)
             return
 
         if not _is_valid_workspace(workspace_id):

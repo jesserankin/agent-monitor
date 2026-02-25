@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import pytest
 
@@ -87,6 +87,15 @@ class TestParseEventLine:
             "workspace_id": 5,
             "workspace_name": "workspace-5",
         }
+
+    def test_activewindowv2(self):
+        event = parse_event_line("activewindowv2>>abc123")
+        assert event == {"event": "activewindowv2", "address": "abc123"}
+
+    def test_activewindowv2_with_hex_prefix(self):
+        """activewindowv2 address is raw — normalization happens in handler."""
+        event = parse_event_line("activewindowv2>>0xabc123")
+        assert event == {"event": "activewindowv2", "address": "0xabc123"}
 
     def test_unknown_event(self):
         assert parse_event_line("focusedmon>>eDP-1,1") is None
@@ -209,6 +218,7 @@ class TestHyprlandMonitor:
         monitor = HyprlandMonitor.__new__(HyprlandMonitor)
         monitor.sessions = {}
         monitor._window_meta = {}
+        monitor._focused_address = None
         monitor.on_session_update = None
         monitor.on_session_remove = None
         monitor._log = MagicMock()
@@ -304,8 +314,8 @@ class TestHyprlandMonitor:
         assert monitor.sessions["abc123"].state == AgentState.IDLE
         assert monitor.sessions["abc123"].task_description == "Claude Code"
 
-    def test_handle_title_change_removes_stale_session(self):
-        """Title no longer matches Claude → remove from sessions."""
+    def test_handle_title_change_keeps_session_on_non_claude_title(self):
+        """Title no longer matches Claude → session persists (e.g., Zellij pane switch)."""
         monitor = self._make_monitor()
         monitor._window_meta["abc123"] = {
             "class": "com.mitchellh.ghostty",
@@ -316,7 +326,10 @@ class TestHyprlandMonitor:
         assert "abc123" in monitor.sessions
 
         monitor._handle_title_change("abc123", "jesse@office:~/projects")
-        assert "abc123" not in monitor.sessions
+        assert "abc123" in monitor.sessions
+        # Session retains last known state
+        assert monitor.sessions["abc123"].session_name == "my-session"
+        assert monitor.sessions["abc123"].state == AgentState.ACTIVE
 
     def test_handle_title_change_unknown_address(self):
         """Title change for unknown window should be ignored."""
@@ -434,21 +447,22 @@ class TestDispatchEventCallbacks:
         monitor = HyprlandMonitor.__new__(HyprlandMonitor)
         monitor.sessions = {}
         monitor._window_meta = {}
+        monitor._focused_address = None
         monitor.on_session_update = None
         monitor.on_session_remove = None
         monitor._log = MagicMock()
         return monitor
 
     @pytest.mark.asyncio
-    async def test_title_change_removes_session_fires_remove_callback(self):
-        """C1: windowtitlev2 Claude -> non-Claude should emit on_session_remove."""
-        removed = []
+    async def test_title_change_non_claude_keeps_session_fires_update(self):
+        """windowtitlev2 Claude -> non-Claude should keep session and emit on_session_update."""
+        updated = []
 
-        async def on_remove(addr):
-            removed.append(addr)
+        async def on_update(session):
+            updated.append(session)
 
         monitor = self._make_monitor()
-        monitor.on_session_remove = on_remove
+        monitor.on_session_update = on_update
         monitor._window_meta["abc123"] = {
             "class": "com.mitchellh.ghostty",
             "workspace_id": 3,
@@ -458,14 +472,15 @@ class TestDispatchEventCallbacks:
         monitor._handle_title_change("abc123", "my-session | ⠐ Working")
         assert "abc123" in monitor.sessions
 
-        # Title change to non-Claude should fire remove callback
+        # Title change to non-Claude should keep session (Zellij pane switch)
         await monitor._dispatch_event({
             "event": "windowtitlev2",
             "address": "abc123",
             "title": "jesse@office:~/projects",
         })
-        assert "abc123" not in monitor.sessions
-        assert removed == ["abc123"]
+        assert "abc123" in monitor.sessions
+        # Session still fires update since it still exists
+        assert len(updated) == 1
 
     @pytest.mark.asyncio
     async def test_closewindow_non_session_no_callback(self):
@@ -558,3 +573,204 @@ class TestDispatchEventCallbacks:
         })
         assert len(updated) == 1
         assert updated[0].state == AgentState.IDLE
+
+
+class TestFocusTracking:
+    """Test activewindowv2 focus change handling."""
+
+    def _make_monitor(self):
+        monitor = HyprlandMonitor.__new__(HyprlandMonitor)
+        monitor.sessions = {}
+        monitor._window_meta = {}
+        monitor._focused_address = None
+        monitor.on_session_update = None
+        monitor.on_session_remove = None
+        monitor._log = MagicMock()
+        return monitor
+
+    @pytest.mark.asyncio
+    async def test_focus_sets_is_focused_on_tracked_session(self):
+        monitor = self._make_monitor()
+        monitor._window_meta["abc123"] = {
+            "class": "com.mitchellh.ghostty",
+            "workspace_id": 3,
+            "pid": 1234,
+        }
+        monitor._handle_title_change("abc123", "my-session | ⠐ Working")
+
+        await monitor._handle_focus_change("abc123")
+
+        assert monitor.sessions["abc123"].is_focused is True
+        assert monitor._focused_address == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_focus_clears_old_and_sets_new(self):
+        updated = []
+
+        async def on_update(session):
+            updated.append((session.address, session.is_focused))
+
+        monitor = self._make_monitor()
+        monitor.on_session_update = on_update
+        monitor._window_meta["abc123"] = {
+            "class": "com.mitchellh.ghostty",
+            "workspace_id": 3,
+            "pid": 1234,
+        }
+        monitor._window_meta["def456"] = {
+            "class": "com.mitchellh.ghostty",
+            "workspace_id": 4,
+            "pid": 5678,
+        }
+        monitor._handle_title_change("abc123", "session-a | ⠐ Working")
+        monitor._handle_title_change("def456", "session-b | ✳ Idle")
+
+        # Focus first session
+        await monitor._handle_focus_change("abc123")
+        assert monitor.sessions["abc123"].is_focused is True
+
+        updated.clear()
+
+        # Focus second session — first should be cleared
+        await monitor._handle_focus_change("def456")
+        assert monitor.sessions["abc123"].is_focused is False
+        assert monitor.sessions["def456"].is_focused is True
+        # Should fire update for old (unfocused) then new (focused)
+        assert updated == [("abc123", False), ("def456", True)]
+
+    @pytest.mark.asyncio
+    async def test_focus_non_session_window(self):
+        """Focusing a non-Claude window should clear focus from old session."""
+        monitor = self._make_monitor()
+        monitor._window_meta["abc123"] = {
+            "class": "com.mitchellh.ghostty",
+            "workspace_id": 3,
+            "pid": 1234,
+        }
+        monitor._handle_title_change("abc123", "my-session | ⠐ Working")
+
+        await monitor._handle_focus_change("abc123")
+        assert monitor.sessions["abc123"].is_focused is True
+
+        # Focus a non-tracked window
+        await monitor._handle_focus_change("unknown999")
+        assert monitor.sessions["abc123"].is_focused is False
+        assert monitor._focused_address == "unknown999"
+
+    @pytest.mark.asyncio
+    async def test_focus_dispatched_via_activewindowv2_event(self):
+        """activewindowv2 event should be routed to _handle_focus_change."""
+        monitor = self._make_monitor()
+        monitor._window_meta["abc123"] = {
+            "class": "com.mitchellh.ghostty",
+            "workspace_id": 3,
+            "pid": 1234,
+        }
+        monitor._handle_title_change("abc123", "my-session | ⠐ Working")
+
+        await monitor._dispatch_event({
+            "event": "activewindowv2",
+            "address": "abc123",
+        })
+        assert monitor.sessions["abc123"].is_focused is True
+
+    @pytest.mark.asyncio
+    async def test_focus_with_0x_prefix_normalized(self):
+        """Address with 0x prefix should be normalized."""
+        monitor = self._make_monitor()
+        monitor._window_meta["abc123"] = {
+            "class": "com.mitchellh.ghostty",
+            "workspace_id": 3,
+            "pid": 1234,
+        }
+        monitor._handle_title_change("abc123", "my-session | ⠐ Working")
+
+        await monitor._handle_focus_change("0xabc123")
+        assert monitor.sessions["abc123"].is_focused is True
+        assert monitor._focused_address == "abc123"
+
+
+class TestResolveSessionCwds:
+    """Test _resolve_session_cwds process correlation."""
+
+    def _make_monitor(self):
+        monitor = HyprlandMonitor.__new__(HyprlandMonitor)
+        monitor.sessions = {}
+        monitor._window_meta = {}
+        monitor._focused_address = None
+        monitor.on_session_update = None
+        monitor.on_session_remove = None
+        monitor._log = MagicMock()
+        return monitor
+
+    @patch("agent_monitor.hyprland.find_claude_processes")
+    @patch("agent_monitor.hyprland.find_zellij_session_for_terminal")
+    @patch("agent_monitor.hyprland._build_zellij_socket_map")
+    def test_assigns_cwd_from_procfs(self, mock_socket_map, mock_find_zellij, mock_find_claude):
+        monitor = self._make_monitor()
+        monitor._window_meta["abc123"] = {
+            "class": "com.mitchellh.ghostty",
+            "workspace_id": 3,
+            "pid": 1000,
+        }
+        monitor._handle_title_change("abc123", "my-session | ⠐ Working")
+        # Remove the auto-resolved CWD from _populate (called in _handle via _resolve)
+        # We need to set up mocks before _resolve_session_cwds is called
+        monitor.sessions["abc123"].cwd = None
+
+        mock_socket_map.return_value = {100: "erudite-zebra"}
+        mock_find_zellij.return_value = "erudite-zebra"
+        mock_find_claude.return_value = [
+            {"pid": 2000, "cwd": "/home/user/my-project", "zellij_session_name": "erudite-zebra"},
+        ]
+
+        monitor._resolve_session_cwds()
+
+        assert monitor.sessions["abc123"].cwd == "my-project"
+        mock_find_zellij.assert_called_once_with(1000, socket_map={100: "erudite-zebra"})
+
+    @patch("agent_monitor.hyprland.find_claude_processes")
+    @patch("agent_monitor.hyprland.find_zellij_session_for_terminal")
+    @patch("agent_monitor.hyprland._build_zellij_socket_map")
+    def test_no_cwd_when_no_zellij(self, mock_socket_map, mock_find_zellij, mock_find_claude):
+        monitor = self._make_monitor()
+        monitor._window_meta["abc123"] = {
+            "class": "com.mitchellh.ghostty",
+            "workspace_id": 3,
+            "pid": 1000,
+        }
+        monitor._handle_title_change("abc123", "my-session | ⠐ Working")
+        monitor.sessions["abc123"].cwd = None
+
+        mock_socket_map.return_value = {}
+        mock_find_zellij.return_value = None
+
+        monitor._resolve_session_cwds()
+
+        assert monitor.sessions["abc123"].cwd is None
+
+    @patch("agent_monitor.hyprland.find_claude_processes")
+    @patch("agent_monitor.hyprland.find_zellij_session_for_terminal")
+    @patch("agent_monitor.hyprland._build_zellij_socket_map")
+    def test_no_cwd_when_no_pid(self, mock_socket_map, mock_find_zellij, mock_find_claude):
+        monitor = self._make_monitor()
+        monitor._window_meta["abc123"] = {
+            "class": "com.mitchellh.ghostty",
+            "workspace_id": 3,
+            "pid": None,
+        }
+        monitor._handle_window_open({
+            "address": "abc123",
+            "workspace_id": 3,
+            "window_class": "com.mitchellh.ghostty",
+            "title": "my-session | ⠐ Working",
+        })
+        # openwindow sets pid=None
+
+        mock_socket_map.return_value = {}
+        mock_find_zellij.return_value = None
+
+        monitor._resolve_session_cwds()
+
+        assert monitor.sessions["abc123"].cwd is None
+        mock_find_zellij.assert_not_called()

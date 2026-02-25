@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
+import time
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -46,6 +48,21 @@ class StatuslineDataChanged(Message):
         super().__init__()
         self.session_name = session_name
         self.data = data
+
+
+def _render_duration(duration_ms: int) -> str:
+    """Format duration in milliseconds as human-readable string."""
+    total_seconds = duration_ms // 1000
+    if total_seconds < 60:
+        return f"{total_seconds}s"
+    minutes = total_seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    remaining_minutes = minutes % 60
+    if remaining_minutes:
+        return f"{hours}h {remaining_minutes}m"
+    return f"{hours}h"
 
 
 def _render_context_bar(pct: float) -> Text:
@@ -155,7 +172,7 @@ class AgentMonitorApp(App):
         await self._watcher.watch()
 
     def _tick_spinners(self) -> None:
-        """Animate spinner for all ACTIVE sessions."""
+        """Animate spinner and update live duration for all ACTIVE sessions."""
         self._spinner_frame = (self._spinner_frame + 1) % len(SPINNER_FRAMES)
         char = SPINNER_FRAMES[self._spinner_frame]
         table = self.query_one(DataTable)
@@ -163,22 +180,50 @@ class AgentMonitorApp(App):
 
         for addr, session in self._sessions.items():
             if session.state == AgentState.ACTIVE and addr in table.rows:
+                row_idx = table.get_row_index(addr)
                 table.update_cell_at(
-                    (table.get_row_index(addr), status_col),
+                    (row_idx, status_col),
                     Text(char, style="dark_orange"),
                 )
+                # Update live duration
+                if self._statusline_columns_added and session.active_since is not None:
+                    time_col = 5  # Group, Session, Status, Task, Context, Time
+                    elapsed_ms = int((time.monotonic() - session.active_since) * 1000)
+                    table.update_cell_at(
+                        (row_idx, time_col),
+                        Text(_render_duration(elapsed_ms)),
+                    )
 
     async def _full_refresh(self) -> None:
         """Periodic full refresh via hyprctl clients."""
         if self._monitor is not None:
             await self._monitor.refresh()
 
+    def _find_statusline_match(self, session: AgentSession) -> dict | None:
+        """Find matching statusline data by CWD (preferred) or session name."""
+        if session.cwd:
+            for key, data in self._statusline_data.items():
+                sl_cwd = data.get("cwd")
+                if sl_cwd and os.path.basename(sl_cwd) == session.cwd:
+                    return data
+        return self._statusline_data.get(session.session_name)
+
     def on_session_changed(self, message: SessionChanged) -> None:
         """Handle a session add/update."""
         session = message.session
 
+        # Track active_since for live duration display
+        old = self._sessions.get(session.address)
+        if session.state == AgentState.ACTIVE:
+            if old and old.state == AgentState.ACTIVE and old.active_since is not None:
+                session.active_since = old.active_since
+            else:
+                session.active_since = time.monotonic()
+        else:
+            session.active_since = None
+
         # Merge pending statusline data if available
-        sl_data = self._statusline_data.get(session.session_name)
+        sl_data = self._find_statusline_match(session)
         if sl_data:
             self._apply_statusline_to_session(session, sl_data)
 
@@ -206,6 +251,21 @@ class AgentMonitorApp(App):
 
         self._update_subtitle()
 
+    def _find_session_for_statusline(self, name: str, data: dict | None) -> AgentSession | None:
+        """Find a session matching statusline data by CWD (preferred) or name."""
+        if data:
+            sl_cwd = data.get("cwd")
+            if sl_cwd:
+                cwd_base = os.path.basename(sl_cwd)
+                for session in self._sessions.values():
+                    if session.cwd and session.cwd == cwd_base:
+                        return session
+        # Fallback: match by statusline filename stem == session_name
+        for session in self._sessions.values():
+            if session.session_name == name:
+                return session
+        return None
+
     def on_statusline_data_changed(self, message: StatuslineDataChanged) -> None:
         """Handle statusline file data update."""
         name = message.session_name
@@ -213,11 +273,10 @@ class AgentMonitorApp(App):
         if message.data is None:
             self._statusline_data.pop(name, None)
             # Clear statusline fields from matching session
-            for session in self._sessions.values():
-                if session.session_name == name:
-                    self._clear_statusline_from_session(session)
-                    self._update_row(session)
-                    break
+            matched = self._find_session_for_statusline(name, None)
+            if matched:
+                self._clear_statusline_from_session(matched)
+                self._update_row(matched)
             return
 
         self._statusline_data[name] = message.data
@@ -225,15 +284,14 @@ class AgentMonitorApp(App):
         # Ensure dynamic columns exist
         if not self._statusline_columns_added:
             table = self.query_one(DataTable)
-            table.add_columns("Cost", "Context", "Model")
+            table.add_columns("Context", "Time")
             self._statusline_columns_added = True
 
-        # Find matching session by session_name and update it
-        for session in self._sessions.values():
-            if session.session_name == name:
-                self._apply_statusline_to_session(session, message.data)
-                self._update_row(session)
-                break
+        # Find matching session and update it
+        matched = self._find_session_for_statusline(name, message.data)
+        if matched:
+            self._apply_statusline_to_session(matched, message.data)
+            self._update_row(matched)
 
     def _apply_statusline_to_session(self, session: AgentSession, data: dict) -> None:
         """Merge statusline data fields into an AgentSession."""
@@ -265,20 +323,24 @@ class AgentMonitorApp(App):
     def _render_row(self, session: AgentSession) -> tuple:
         """Render a session into DataTable cell values."""
         group = session.workspace_group
+        focus_prefix = "\u25b8 " if session.is_focused else ""
 
         if session.state == AgentState.ATTENTION:
             status = Text("\U0001f514", style="bold yellow")
-            name = Text(session.session_name, style="bold yellow")
+            name_style = "bold yellow" if not session.is_focused else "bold underline yellow"
+            name = Text(f"{focus_prefix}{session.session_name}", style=name_style)
             task_text = session.task_description
             task_style = "bold"
         elif session.state == AgentState.ACTIVE:
             status = Text(SPINNER_FRAMES[self._spinner_frame], style="dark_orange")
-            name = Text(session.session_name, style="dim")
+            name_style = "dim" if not session.is_focused else "bold"
+            name = Text(f"{focus_prefix}{session.session_name}", style=name_style)
             task_text = session.task_description
             task_style = "dim"
         else:
             status = Text("\u2733", style="")
-            name = Text(session.session_name)
+            name_style = "" if not session.is_focused else "bold"
+            name = Text(f"{focus_prefix}{session.session_name}", style=name_style)
             task_text = session.task_description
             task_style = ""
 
@@ -290,10 +352,13 @@ class AgentMonitorApp(App):
         base = (group, name, status, task_styled)
 
         if self._statusline_columns_added:
-            cost = f"${session.cost_usd:.2f}" if session.cost_usd is not None else ""
             context = _render_context_bar(session.context_used_pct) if session.context_used_pct is not None else Text("")
-            model = session.model_name or ""
-            return base + (cost, context, model)
+            if session.active_since is not None:
+                elapsed_ms = int((time.monotonic() - session.active_since) * 1000)
+                duration = Text(_render_duration(elapsed_ms))
+            else:
+                duration = Text("")
+            return base + (context, duration)
 
         return base
 

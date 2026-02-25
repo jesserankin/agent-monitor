@@ -38,12 +38,15 @@ class AgentSession:
     status_char: str = "\u2733"
     workspace_group: int = field(init=False)
     pid: int | None = None
+    cwd: str | None = None
+    active_since: float | None = None
     cost_usd: float | None = None
     duration_ms: int | None = None
     context_used_pct: float | None = None
     model_name: str | None = None
     lines_added: int | None = None
     lines_removed: int | None = None
+    is_focused: bool = False
 
     def __post_init__(self):
         self.workspace_group = self.workspace_id % 10

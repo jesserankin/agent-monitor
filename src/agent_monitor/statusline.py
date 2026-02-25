@@ -21,6 +21,7 @@ def _extract_fields(data: dict) -> dict:
     model = data.get("model") if isinstance(data.get("model"), dict) else {}
 
     return {
+        "cwd": data.get("cwd"),
         "cost_usd": cost.get("total_cost_usd"),
         "duration_ms": cost.get("total_duration_ms"),
         "context_used_pct": context.get("used_percentage"),

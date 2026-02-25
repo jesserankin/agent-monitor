@@ -15,6 +15,7 @@ SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "statusline-sidecar.sh"
 
 SAMPLE_INPUT = {
     "session_id": "test-session",
+    "cwd": "/home/user/my-project",
     "model": {"display_name": "Opus"},
     "context_window": {"used_percentage": 45.2},
     "cost": {
@@ -44,7 +45,7 @@ def run_sidecar(input_data: str, env_overrides: dict | None = None) -> subproces
 class TestSidecarValidPayload:
     """Test the happy path: valid JSON input produces correct output and file."""
 
-    def test_writes_json_file(self, tmp_path):
+    def test_writes_json_file_by_cwd(self, tmp_path):
         monitor_dir = tmp_path / "claude-monitor"
         result = run_sidecar(
             json.dumps(SAMPLE_INPUT),
@@ -55,7 +56,8 @@ class TestSidecarValidPayload:
         )
 
         assert result.returncode == 0, f"stderr: {result.stderr}"
-        json_file = monitor_dir / "my-session.json"
+        # File should be named by CWD basename, not ZELLIJ_SESSION_NAME
+        json_file = monitor_dir / "my-project.json"
         assert json_file.exists(), f"Expected {json_file} to exist. Dir contents: {list(monitor_dir.iterdir()) if monitor_dir.exists() else 'dir missing'}"
 
         written = json.loads(json_file.read_text())
@@ -107,7 +109,8 @@ class TestSidecarValidPayload:
 class TestSidecarIdentityFallback:
     """Test the identity resolution fallback chain."""
 
-    def test_uses_zellij_session_name(self, tmp_path):
+    def test_uses_cwd_basename(self, tmp_path):
+        """CWD basename should be preferred over ZELLIJ_SESSION_NAME."""
         run_sidecar(
             json.dumps(SAMPLE_INPUT),
             env_overrides={
@@ -117,22 +120,24 @@ class TestSidecarIdentityFallback:
         )
 
         monitor_dir = tmp_path / "claude-monitor"
-        assert (monitor_dir / "zellij-name.json").exists()
+        # Should use CWD basename "my-project", not ZELLIJ_SESSION_NAME
+        assert (monitor_dir / "my-project.json").exists()
+        assert not (monitor_dir / "zellij-name.json").exists()
 
-    def test_falls_back_to_session_id(self, tmp_path):
+    def test_falls_back_to_session_id_when_no_cwd(self, tmp_path):
+        input_no_cwd = {k: v for k, v in SAMPLE_INPUT.items() if k != "cwd"}
         env = {
             "XDG_RUNTIME_DIR": str(tmp_path),
+            "ZELLIJ_SESSION_NAME": "",
         }
-        # Remove ZELLIJ_SESSION_NAME if set
-        env["ZELLIJ_SESSION_NAME"] = ""
 
-        run_sidecar(json.dumps(SAMPLE_INPUT), env_overrides=env)
+        run_sidecar(json.dumps(input_no_cwd), env_overrides=env)
 
         monitor_dir = tmp_path / "claude-monitor"
         assert (monitor_dir / "test-session.json").exists()
 
     def test_falls_back_to_unknown_with_pid(self, tmp_path):
-        """No ZELLIJ_SESSION_NAME and no session_id -> unknown-PID."""
+        """No cwd and no session_id -> unknown-PID."""
         input_data = {"model": {"display_name": "Opus"}, "cost": {}, "context_window": {}}
         env = {
             "XDG_RUNTIME_DIR": str(tmp_path),
@@ -147,17 +152,17 @@ class TestSidecarIdentityFallback:
         assert len(json_files) == 1, f"Expected one unknown-* file, got: {list(monitor_dir.iterdir())}"
 
     def test_sanitizes_identifier(self, tmp_path):
-        """Special characters in session name should be stripped."""
+        """Special characters in CWD basename should be stripped."""
+        input_data = dict(SAMPLE_INPUT, cwd="/home/user/my project/../../etc")
         run_sidecar(
-            json.dumps(SAMPLE_INPUT),
+            json.dumps(input_data),
             env_overrides={
-                "ZELLIJ_SESSION_NAME": "my session/../../etc",
+                "ZELLIJ_SESSION_NAME": "irrelevant",
                 "XDG_RUNTIME_DIR": str(tmp_path),
             },
         )
 
         monitor_dir = tmp_path / "claude-monitor"
-        # Should have no slashes or spaces in filename
         json_files = list(monitor_dir.glob("*.json"))
         assert len(json_files) == 1
         assert "/" not in json_files[0].name
@@ -193,7 +198,7 @@ class TestSidecarEdgeCases:
         assert result.returncode != 0
 
     def test_missing_optional_fields_in_json(self, tmp_path):
-        """JSON without cost/model/context fields should still work."""
+        """JSON without cost/model/context/cwd fields should still work (falls back to session_id)."""
         minimal = {"session_id": "minimal"}
         result = run_sidecar(
             json.dumps(minimal),
@@ -205,7 +210,8 @@ class TestSidecarEdgeCases:
 
         assert result.returncode == 0
         monitor_dir = tmp_path / "claude-monitor"
-        assert (monitor_dir / "minimal-session.json").exists()
+        # No cwd in JSON, so falls back to session_id
+        assert (monitor_dir / "minimal.json").exists()
 
     def test_non_object_nested_fields(self, tmp_path):
         """Nested fields that are non-objects should produce graceful fallback output."""

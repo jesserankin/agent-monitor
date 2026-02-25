@@ -11,6 +11,7 @@ from agent_monitor.statusline import StatuslineWatcher
 
 SAMPLE_STATUSLINE = {
     "session_id": "my-session",
+    "cwd": "/home/user/my-project",
     "model": {"display_name": "Opus"},
     "context_window": {"used_percentage": 45.2},
     "cost": {
@@ -35,6 +36,7 @@ class TestReadFile:
 
         assert "my-session" in watcher.sessions
         data = watcher.sessions["my-session"]
+        assert data["cwd"] == "/home/user/my-project"
         assert data["cost_usd"] == 1.23
         assert data["duration_ms"] == 45000
         assert data["context_used_pct"] == 45.2
@@ -52,6 +54,7 @@ class TestReadFile:
 
         assert "sparse" in watcher.sessions
         data = watcher.sessions["sparse"]
+        assert data["cwd"] is None
         assert data["cost_usd"] is None
         assert data["duration_ms"] is None
         assert data["context_used_pct"] is None

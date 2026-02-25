@@ -12,13 +12,17 @@ if ! echo "$input" | jq empty 2>/dev/null; then
     exit 1
 fi
 
-# Identity resolution: ZELLIJ_SESSION_NAME -> JSON .session_id -> unknown-PID
-IDENT="${ZELLIJ_SESSION_NAME:-}"
+# Identity resolution: CWD basename -> session_id -> unknown-PID
+IDENT=""
+CWD_VAL=$(echo "$input" | jq -r '.cwd // empty')
+if [ -n "$CWD_VAL" ]; then
+    IDENT=$(basename "$CWD_VAL")
+fi
 if [ -z "$IDENT" ]; then
     IDENT=$(echo "$input" | jq -r '.session_id // empty')
 fi
-# Sanitize: alphanumeric + hyphen + underscore only
-IDENT=$(echo "$IDENT" | tr -cd 'a-zA-Z0-9_-')
+# Sanitize: alphanumeric + hyphen + underscore + dot only
+IDENT=$(echo "$IDENT" | tr -cd 'a-zA-Z0-9_.-')
 if [ -z "$IDENT" ]; then
     IDENT="unknown-$$"
     echo "Warning: no session identity found, using $IDENT" >&2
