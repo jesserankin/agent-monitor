@@ -284,17 +284,10 @@ class HyprlandMonitor:
     async def refresh(self) -> None:
         """Re-fetch all clients via hyprctl for periodic full sync."""
         clients = await fetch_clients()
-        old_sessions = dict(self.sessions)
         old_addresses = set(self.sessions.keys())
         self._window_meta.clear()
         self.sessions.clear()
         self._populate_from_clients(clients)
-
-        # Carry over sessions whose windows still exist but titles
-        # no longer match (e.g., Zellij pane switched away from Claude)
-        for addr, session in old_sessions.items():
-            if addr not in self.sessions and addr in self._window_meta:
-                self.sessions[addr] = session
 
         new_addresses = set(self.sessions.keys())
 
