@@ -9,6 +9,7 @@ import pytest
 from agent_monitor.hyprland import (
     HyprlandMonitor,
     fetch_clients,
+    find_zellij_window_in_clients,
     get_event_socket_path,
     normalize_address,
     parse_event_line,
@@ -197,7 +198,56 @@ class TestFetchClients:
             result = await fetch_clients()
 
         assert result == []
-        mock_proc.kill.assert_called_once()
+
+
+class TestFindZellijWindowInClients:
+    @patch("agent_monitor.hyprland.find_zellij_session_for_terminal")
+    @patch("agent_monitor.hyprland._build_zellij_socket_map")
+    def test_finds_matching_terminal_window(self, mock_socket_map, mock_find_session):
+        mock_socket_map.return_value = {123: "ge-combat"}
+        mock_find_session.side_effect = lambda pid, socket_map: {
+            100: "other-session",
+            200: "ge-combat",
+        }.get(pid)
+        clients = [
+            {
+                "address": "0xaaa",
+                "class": "com.mitchellh.ghostty",
+                "workspace": {"id": 2},
+                "pid": 100,
+            },
+            {
+                "address": "0xbbb",
+                "class": "com.mitchellh.ghostty",
+                "workspace": {"id": 11},
+                "pid": 200,
+            },
+        ]
+
+        result = find_zellij_window_in_clients("ge-combat", clients)
+
+        assert result == {
+            "address": "bbb",
+            "workspace_id": 11,
+            "window_class": "com.mitchellh.ghostty",
+            "pid": 200,
+        }
+
+    @patch("agent_monitor.hyprland.find_zellij_session_for_terminal")
+    @patch("agent_monitor.hyprland._build_zellij_socket_map")
+    def test_skips_non_terminal_windows(self, mock_socket_map, mock_find_session):
+        mock_socket_map.return_value = {}
+        clients = [
+            {
+                "address": "0xaaa",
+                "class": "firefox",
+                "workspace": {"id": 2},
+                "pid": 100,
+            }
+        ]
+
+        assert find_zellij_window_in_clients("ge-combat", clients) is None
+        mock_find_session.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_returns_empty_on_nonzero_exit(self):

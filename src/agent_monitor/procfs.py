@@ -71,6 +71,15 @@ def _read_cwd(pid: int) -> str | None:
         return None
 
 
+def _read_cmdline(pid: int) -> list[str]:
+    """Read process argv from /proc/<pid>/cmdline."""
+    try:
+        data = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except (OSError, PermissionError):
+        return []
+    return [part.decode(errors="replace") for part in data.split(b"\0") if part]
+
+
 def _get_socket_inodes(pid: int) -> set[int]:
     """Get all socket inodes for a process from /proc/<pid>/fd/."""
     inodes: set[int] = set()
@@ -207,6 +216,64 @@ def find_claude_processes() -> list[dict]:
         })
 
     return results
+
+
+def find_codex_processes() -> list[dict]:
+    """Find running Codex CLI processes.
+
+    Returns dicts with keys: pid, cwd, process_cwd, argv, zellij_session_name.
+    The reported cwd prefers Codex's --cd target when present, then falls back
+    to the process CWD.
+    """
+    results: list[dict] = []
+    try:
+        pids = [int(p) for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return results
+
+    for pid in pids:
+        argv = _read_cmdline(pid)
+        if not _is_codex_process(pid, argv):
+            continue
+
+        process_cwd = _read_cwd(pid)
+        cwd = _extract_codex_cwd(argv, process_cwd)
+        zellij_session = _find_ancestor_zellij_session(pid)
+
+        results.append({
+            "pid": pid,
+            "cwd": cwd,
+            "process_cwd": process_cwd,
+            "argv": argv,
+            "zellij_session_name": zellij_session,
+        })
+
+    return results
+
+
+def _is_codex_process(pid: int, argv: list[str]) -> bool:
+    name = _process_name(pid)
+    if name == "codex":
+        return True
+    if not argv:
+        return False
+    return os.path.basename(argv[0]) == "codex"
+
+
+def _extract_codex_cwd(argv: list[str], process_cwd: str | None) -> str | None:
+    for index, arg in enumerate(argv):
+        if arg == "--cd" and index + 1 < len(argv):
+            return _resolve_process_path(argv[index + 1], process_cwd)
+        if arg.startswith("--cd="):
+            return _resolve_process_path(arg.split("=", 1)[1], process_cwd)
+    return process_cwd
+
+
+def _resolve_process_path(path: str, process_cwd: str | None) -> str:
+    if os.path.isabs(path):
+        return os.path.normpath(path)
+    base = process_cwd or os.getcwd()
+    return os.path.normpath(os.path.join(base, path))
 
 
 def _find_ancestor_zellij_session(pid: int) -> str | None:

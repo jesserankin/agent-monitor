@@ -1,6 +1,14 @@
 """Tests for data models and window title parsing."""
 
-from agent_monitor.models import AgentState, parse_window_title
+from agent_monitor.models import (
+    AgentRun,
+    AgentState,
+    AgentStatus,
+    ClientName,
+    HostSnapshot,
+    Worktree,
+    parse_window_title,
+)
 
 
 class TestParseWindowTitle:
@@ -69,3 +77,70 @@ class TestParseWindowTitle:
             "\U0001f514 | \u2733 Browser Testing", "com.mitchellh.ghostty"
         )
         assert result is None
+
+
+class TestV2Models:
+    def test_worktree_from_devtools_instance_expands_relative_path(self):
+        worktree = Worktree.from_devtools_instance(
+            "game-engine-v2::combat-ui",
+            {
+                "branch": "combat-ui",
+                "worktree_path": ".worktrees/combat-ui",
+                "project_root": "/home/jesse/projects/game-engine-v2",
+                "port": "4030",
+                "containerized": True,
+            },
+        )
+
+        assert worktree.project == "game-engine-v2"
+        assert worktree.path == "/home/jesse/projects/game-engine-v2/.worktrees/combat-ui"
+        assert worktree.port == 4030
+        assert worktree.containerized is True
+
+    def test_agent_run_from_overlay_defaults_status_to_stopped(self):
+        run = AgentRun.from_dict(
+            "game-engine-v2::combat-ui::main",
+            {
+                "worktree_id": "game-engine-v2::combat-ui",
+                "client": "codex",
+                "workspace_group": 3,
+                "zellij_session": "ge2-combat-ui",
+                "cwd": "/home/jesse/projects/game-engine-v2/.worktrees/combat-ui",
+                "launch": {"argv": ["codex", "--cd", "{worktree_path}"]},
+            },
+        )
+
+        assert run.client == ClientName.CODEX
+        assert run.status == AgentStatus.STOPPED
+        assert run.workspace_group == 3
+        assert run.launch["argv"][0] == "codex"
+
+    def test_host_snapshot_round_trip(self):
+        snapshot = HostSnapshot.from_dict({
+            "host": {"name": "workstation", "transport": "ssh", "hyprland": True},
+            "worktrees": [
+                {
+                    "id": "project::branch",
+                    "project": "project",
+                    "branch": "branch",
+                    "path": "/repo/.worktrees/branch",
+                }
+            ],
+            "agent_runs": [
+                {
+                    "id": "project::branch::main",
+                    "worktree_id": "project::branch",
+                    "client": "claude",
+                    "status": "idle",
+                    "title": "Claude Code",
+                    "model": "Sonnet",
+                }
+            ],
+        })
+
+        data = snapshot.to_dict()
+
+        assert data["host"]["name"] == "workstation"
+        assert data["agent_runs"][0]["client"] == "claude"
+        assert data["agent_runs"][0]["status"] == "idle"
+        assert data["agent_runs"][0]["telemetry"]["model"] == "Sonnet"

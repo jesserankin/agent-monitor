@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from agent_monitor.procfs import (
     _build_zellij_socket_map,
+    _extract_codex_cwd,
     _find_ancestor_zellij_session,
     _find_zellij_client_pid,
     _get_child_pids,
@@ -14,6 +15,7 @@ from agent_monitor.procfs import (
     _process_name,
     _read_cwd,
     _read_environ_var,
+    find_codex_processes,
     find_claude_processes,
     find_zellij_session_for_terminal,
 )
@@ -167,6 +169,58 @@ class TestFindClaudeProcesses:
     def test_returns_empty_on_error(self, mock_listdir):
         mock_listdir.side_effect = OSError("permission denied")
         assert find_claude_processes() == []
+
+
+class TestFindCodexProcesses:
+    def test_extract_codex_cwd_from_cd_flag(self):
+        result = _extract_codex_cwd(
+            ["codex", "--cd", ".worktrees/branch"],
+            "/home/user/project",
+        )
+        assert result == "/home/user/project/.worktrees/branch"
+
+    def test_extract_codex_cwd_from_equals_flag(self):
+        result = _extract_codex_cwd(
+            ["codex", "--cd=/home/user/project/.worktrees/branch"],
+            "/tmp",
+        )
+        assert result == "/home/user/project/.worktrees/branch"
+
+    def test_extract_codex_cwd_falls_back_to_process_cwd(self):
+        assert _extract_codex_cwd(["codex"], "/home/user/project") == "/home/user/project"
+
+    @patch("agent_monitor.procfs._find_ancestor_zellij_session")
+    @patch("agent_monitor.procfs._read_cwd")
+    @patch("agent_monitor.procfs._read_cmdline")
+    @patch("agent_monitor.procfs._process_name")
+    @patch("os.listdir")
+    def test_finds_codex_procs(self, mock_listdir, mock_name, mock_cmdline, mock_cwd, mock_ancestor):
+        mock_listdir.return_value = ["1", "100", "200", "300"]
+        mock_name.side_effect = lambda pid: {1: "init", 100: "codex", 200: "bash", 300: "node"}.get(pid)
+        mock_cmdline.side_effect = lambda pid: {
+            100: ["codex", "--cd", ".worktrees/a"],
+            200: ["bash"],
+            300: ["/usr/bin/codex", "--cd=/repo/project/.worktrees/b"],
+        }.get(pid, [])
+        mock_cwd.side_effect = lambda pid: {
+            100: "/repo/project",
+            300: "/tmp",
+        }.get(pid)
+        mock_ancestor.side_effect = lambda pid: {100: "zellij-a", 300: "zellij-b"}.get(pid)
+
+        results = find_codex_processes()
+
+        assert len(results) == 2
+        assert results[0]["pid"] == 100
+        assert results[0]["cwd"] == "/repo/project/.worktrees/a"
+        assert results[0]["zellij_session_name"] == "zellij-a"
+        assert results[1]["pid"] == 300
+        assert results[1]["cwd"] == "/repo/project/.worktrees/b"
+
+    @patch("os.listdir")
+    def test_returns_empty_on_error(self, mock_listdir):
+        mock_listdir.side_effect = OSError("permission denied")
+        assert find_codex_processes() == []
 
 
 class TestFindAncestorZellijSession:

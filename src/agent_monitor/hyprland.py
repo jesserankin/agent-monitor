@@ -8,7 +8,7 @@ import logging
 import os
 from collections.abc import Awaitable, Callable
 
-from agent_monitor.models import AgentSession, AgentState, parse_window_title
+from agent_monitor.models import AgentSession, AgentState, TERMINAL_CLASSES, parse_window_title
 from agent_monitor.procfs import (
     _build_zellij_socket_map,
     find_claude_processes,
@@ -186,6 +186,41 @@ async def fetch_active_window() -> str | None:
     if not address:
         return None
     return normalize_address(address)
+
+
+async def find_zellij_window(session_name: str) -> dict | None:
+    """Find a Hyprland terminal window attached to a zellij session."""
+    clients = await fetch_clients()
+    return find_zellij_window_in_clients(session_name, clients)
+
+
+def find_zellij_window_in_clients(session_name: str, clients: list[dict]) -> dict | None:
+    """Find a zellij session window from already-fetched Hyprland client data."""
+    socket_map = _build_zellij_socket_map()
+    for client in clients:
+        window_class = client.get("class", "")
+        if window_class not in TERMINAL_CLASSES:
+            continue
+
+        pid = client.get("pid")
+        if not isinstance(pid, int):
+            continue
+
+        zellij_session = find_zellij_session_for_terminal(pid, socket_map=socket_map)
+        if zellij_session != session_name:
+            continue
+
+        address = normalize_address(client.get("address", ""))
+        if not address:
+            continue
+
+        return {
+            "address": address,
+            "workspace_id": client.get("workspace", {}).get("id"),
+            "window_class": window_class,
+            "pid": pid,
+        }
+    return None
 
 
 async def listen_events(
