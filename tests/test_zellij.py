@@ -6,10 +6,13 @@ import pytest
 
 from agent_monitor.zellij import (
     attach_session,
+    create_session_with_command,
     middle_workspace_for_group,
     session_name_for_run_id,
     terminal_attach_command,
+    zellij_create_background_command,
     zellij_attach_command,
+    zellij_run_command,
 )
 
 
@@ -25,6 +28,40 @@ def test_zellij_attach_command_with_create_and_cwd():
         "game-engine-v2-combat-ui",
         "options",
         "--default-cwd",
+        "/repo/worktree",
+    ]
+
+
+def test_zellij_create_background_command_with_cwd():
+    assert zellij_create_background_command("my-session", cwd="/repo/worktree") == [
+        "zellij",
+        "attach",
+        "--create-background",
+        "my-session",
+        "options",
+        "--default-cwd",
+        "/repo/worktree",
+    ]
+
+
+def test_zellij_run_command_with_cwd_and_pane_name():
+    assert zellij_run_command(
+        "my-session",
+        ["codex", "--cd", "/repo/worktree"],
+        cwd="/repo/worktree",
+        pane_name="agent",
+    ) == [
+        "zellij",
+        "--session",
+        "my-session",
+        "run",
+        "--name",
+        "agent",
+        "--cwd",
+        "/repo/worktree",
+        "--",
+        "codex",
+        "--cd",
         "/repo/worktree",
     ]
 
@@ -119,6 +156,91 @@ def test_attach_session_launches_terminal_on_middle_workspace():
             ],
             start_new_session=True,
         )
+
+
+def test_attach_session_creates_session_with_launch_command_then_attaches():
+    with patch("agent_monitor.zellij.create_session_with_command", return_value=True) as mock_create, \
+         patch("agent_monitor.zellij.terminal_attach_command", return_value=["ghostty", "-e", "zellij", "attach", "s"]) as mock_terminal, \
+         patch("agent_monitor.zellij.shutil.which", return_value=None), \
+         patch("agent_monitor.zellij.subprocess.Popen") as mock_popen:
+        assert attach_session(
+            "s",
+            create=True,
+            cwd="/repo/worktree",
+            launch_argv=["codex", "--cd", "/repo/worktree"],
+            pane_name="agent",
+        ) is True
+
+        mock_create.assert_called_once_with(
+            "s",
+            ["codex", "--cd", "/repo/worktree"],
+            cwd="/repo/worktree",
+            pane_name="agent",
+        )
+        mock_terminal.assert_called_once_with("s", create=False, cwd="/repo/worktree")
+        mock_popen.assert_called_once_with(
+            ["ghostty", "-e", "zellij", "attach", "s"],
+            start_new_session=True,
+        )
+
+
+def test_attach_session_returns_false_when_launch_command_fails():
+    with patch("agent_monitor.zellij.create_session_with_command", return_value=False), \
+         patch("agent_monitor.zellij.terminal_attach_command", return_value=["ghostty", "-e", "zellij", "attach", "s"]) as mock_terminal:
+        assert attach_session(
+            "s",
+            create=True,
+            cwd="/repo/worktree",
+            launch_argv=["codex", "--cd", "/repo/worktree"],
+        ) is False
+        mock_terminal.assert_called_once_with("s", create=False, cwd="/repo/worktree")
+
+
+def test_attach_session_checks_terminal_before_launching_command():
+    with patch("agent_monitor.zellij.create_session_with_command") as mock_create, \
+         patch("agent_monitor.zellij.terminal_attach_command", return_value=None):
+        assert attach_session(
+            "s",
+            create=True,
+            cwd="/repo/worktree",
+            launch_argv=["codex", "--cd", "/repo/worktree"],
+        ) is False
+        mock_create.assert_not_called()
+
+
+def test_create_session_with_command_runs_create_then_command():
+    with patch("agent_monitor.zellij.subprocess.run") as mock_run:
+        assert create_session_with_command(
+            "s",
+            ["codex", "--cd", "/repo/worktree"],
+            cwd="/repo/worktree",
+            pane_name="agent",
+        ) is True
+
+    assert mock_run.call_count == 2
+    assert mock_run.call_args_list[0].args[0] == [
+        "zellij",
+        "attach",
+        "--create-background",
+        "s",
+        "options",
+        "--default-cwd",
+        "/repo/worktree",
+    ]
+    assert mock_run.call_args_list[1].args[0] == [
+        "zellij",
+        "--session",
+        "s",
+        "run",
+        "--name",
+        "agent",
+        "--cwd",
+        "/repo/worktree",
+        "--",
+        "codex",
+        "--cd",
+        "/repo/worktree",
+    ]
 
 
 def test_attach_session_returns_false_without_terminal():

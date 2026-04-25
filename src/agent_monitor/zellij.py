@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import os
 import re
 import shutil
@@ -39,6 +40,63 @@ def zellij_attach_command(
     return command
 
 
+def zellij_create_background_command(
+    session_name: str,
+    *,
+    cwd: str | None = None,
+) -> list[str]:
+    """Build a command that ensures a detached zellij session exists."""
+    command = ["zellij", "attach", "--create-background", session_name]
+    if cwd:
+        command.extend(["options", "--default-cwd", cwd])
+    return command
+
+
+def zellij_run_command(
+    session_name: str,
+    argv: Sequence[str],
+    *,
+    cwd: str | None = None,
+    pane_name: str | None = None,
+) -> list[str]:
+    """Build a command that runs argv inside an existing zellij session."""
+    command = ["zellij", "--session", session_name, "run"]
+    if pane_name:
+        command.extend(["--name", pane_name])
+    if cwd:
+        command.extend(["--cwd", cwd])
+    command.extend(["--", *argv])
+    return command
+
+
+def create_session_with_command(
+    session_name: str,
+    argv: Sequence[str],
+    *,
+    cwd: str | None = None,
+    pane_name: str | None = None,
+) -> bool:
+    """Create a detached session, then start argv in it."""
+    if not argv:
+        return False
+    try:
+        subprocess.run(
+            zellij_create_background_command(session_name, cwd=cwd),
+            capture_output=True,
+            check=True,
+            timeout=10,
+        )
+        subprocess.run(
+            zellij_run_command(session_name, argv, cwd=cwd, pane_name=pane_name),
+            capture_output=True,
+            check=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+    return True
+
+
 def terminal_attach_command(
     session_name: str,
     terminal: str | None = None,
@@ -64,11 +122,27 @@ def attach_session(
     *,
     create: bool = False,
     cwd: str | None = None,
+    launch_argv: Sequence[str] | None = None,
+    pane_name: str | None = None,
 ) -> bool:
     """Open a local terminal attached to a zellij session."""
-    command = terminal_attach_command(session_name, create=create, cwd=cwd)
+    command = terminal_attach_command(
+        session_name,
+        create=create and not launch_argv,
+        cwd=cwd,
+    )
     if command is None:
         return False
+
+    if create and launch_argv:
+        if not create_session_with_command(
+            session_name,
+            launch_argv,
+            cwd=cwd,
+            pane_name=pane_name,
+        ):
+            return False
+
     if workspace_group is not None and shutil.which("hyprctl"):
         workspace_id = middle_workspace_for_group(workspace_group)
         subprocess.Popen(

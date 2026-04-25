@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
 
-from agent_monitor.models import AgentRun, HostSnapshot
+from agent_monitor.models import AgentRun, ClientName, HostSnapshot
 from agent_monitor.registry import build_host_snapshot, set_overlay_workspace_group, set_overlay_zellij_session
 from agent_monitor.zellij import attach_session, session_name_for_run_id
 
@@ -53,6 +54,7 @@ class LocalHostAdapter:
 
     def open_run(self, run: AgentRun) -> bool:
         create = False
+        launch_argv: Sequence[str] | None = None
         if not run.zellij_session:
             run = set_overlay_zellij_session(
                 run,
@@ -60,9 +62,21 @@ class LocalHostAdapter:
                 self.overlay_path,
             )
             create = True
+            launch_argv = _launch_argv_for_run(run)
         return attach_session(
             run.zellij_session,
             workspace_group=run.workspace_group,
             create=create,
             cwd=run.cwd,
+            launch_argv=launch_argv,
+            pane_name=run.agent_pane or "agent",
         )
+
+
+def _launch_argv_for_run(run: AgentRun) -> Sequence[str] | None:
+    argv = run.launch.get("argv")
+    if isinstance(argv, list) and all(isinstance(part, str) and part for part in argv):
+        return argv
+    if run.client == ClientName.CODEX and run.cwd:
+        return ["codex", "--cd", run.cwd]
+    return None

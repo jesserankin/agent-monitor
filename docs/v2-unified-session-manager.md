@@ -431,25 +431,25 @@ Implemented and manually verified:
 - If no existing terminal is found, `Enter` opens a terminal attached to the saved zellij session.
 - Fallback terminal creation launches on the middle workspace for the assigned group (`WS 1 -> workspace 11`, `WS 2 -> workspace 12`, etc.) instead of inheriting agent-monitor's floating/shared workspace.
 - `Enter` on a row without a saved zellij session creates a stable zellij session name from the run id, persists it to the overlay, and opens it with `zellij attach --create ... options --default-cwd <worktree-cwd>`.
-- The currently created session is plain zellij rooted in the worktree. It does not yet auto-launch Codex inside the new session.
-- Full test suite currently passes: `scripts/test` reports `185 passed`.
+- New zellij session creation can now launch an initial client command. It uses the run's persisted `launch.argv` when present, and defaults to `codex --cd <cwd>` for Codex runs.
+- Rows with `client=unknown` and no launch command still open as plain zellij rooted in the worktree.
+- Full test suite currently passes: `scripts/test` reports `194 passed`.
 
 Known manual behavior:
 
 - Assigning `extractor::vendor` to `WS 1` persisted across restarts.
 - Pressing `Enter` on its running row switches/focuses the existing zellij terminal instead of opening a duplicate.
 - Stopping that Codex process and pressing `Enter` reopens/attaches the saved zellij session.
-- Creating a zellij session for a row with no saved session works, but it lands in a plain shell rather than a Codex pane.
+- Creating a zellij session for a Codex row with no saved session now starts Codex in the session before attaching.
 
 Recommended next slices:
 
-1. **Launch Codex in newly created sessions**: when a stopped Codex row has no zellij session, create the session with a command or layout that starts `codex --cd <worktree_path>` rather than a plain shell.
-2. **Make row identity less synthetic**: distinguish worktree-level default rows from concrete agent-run rows so multiple Codex runs in one worktree can be represented cleanly.
-3. **Add Codex SQLite telemetry**: read `~/.codex/state_5.sqlite` for thread title/model/token/updated metadata and attach it to matched runs.
-4. **Add explicit CLI helpers**: `agent-monitor set-group`, `agent-monitor open-run`, and eventually remote-safe JSON responses.
-5. **Remote support**: add config parsing and SSH host adapter once the local command surface is stable.
+1. **Make row identity less synthetic**: distinguish worktree-level default rows from concrete agent-run rows so multiple Codex runs in one worktree can be represented cleanly.
+2. **Add Codex SQLite telemetry**: read `~/.codex/state_5.sqlite` for thread title/model/token/updated metadata and attach it to matched runs.
+3. **Add explicit CLI helpers**: `agent-monitor set-group`, `agent-monitor open-run`, and eventually remote-safe JSON responses.
+4. **Remote support**: add config parsing and SSH host adapter once the local command surface is stable.
 
-### Immediate Next Slice: Launch Codex on Session Creation
+### Completed Slice: Launch Codex on Session Creation
 
 Goal: `Enter` on a stopped Codex run should produce an attached terminal where
 Codex is already running in the worktree.
@@ -465,6 +465,8 @@ Scope:
   open still has stable identity.
 - Do not introduce devcontainer launch in this slice. If the worktree is plain
   host-backed today, keep the command plain host-backed.
+- Check that a supported terminal can be constructed before creating the zellij
+  session and launching the client command.
 
 Behavioral expectations:
 
@@ -477,17 +479,15 @@ Behavioral expectations:
 - Tests should cover command construction without requiring a real zellij or
   terminal process.
 
-Likely implementation points:
+Implemented points:
 
-- `models.AgentRun.stopped_for_worktree` should probably default to
-  `client=codex` once the "default client" config exists. Until then, process
-  discovery can continue upgrading unknown stopped rows to Codex when a Codex
-  process is found.
-- `zellij.py` can grow a small helper for "attach existing" versus "create and
-  run command"; keep terminal selection and Hyprland workspace placement in one
-  place.
-- `hosts.LocalHostAdapter.open_run` should decide whether it is creating a new
-  session and pass an optional launch command down to `zellij.py`.
+- `zellij.py` now has helpers for background session creation and running an
+  initial command inside a session.
+- `hosts.LocalHostAdapter.open_run` decides whether it is creating a new session
+  and passes an optional launch command down to `zellij.py`.
+- `models.AgentRun.stopped_for_worktree` still returns `client=unknown`.
+  A default-client config can change this later without altering zellij launch
+  mechanics.
 
 ### Phase 1: Host Snapshot + Normalized Models
 - [x] Introduce `HostSnapshot`, `Worktree`, `AgentRun`, `AgentStatus`, and `ClientTelemetry` models
@@ -523,7 +523,7 @@ Likely implementation points:
 - [x] Open/focus existing local zellij sessions
 - [ ] Open/focus remote zellij sessions
 - [x] Create a plain local zellij session for a run with no saved zellij session
-- [ ] Start a plain client run on the owning host, e.g. `codex --cd <worktree_path>` inside the created session
+- [x] Start a plain client run on the owning host, e.g. `codex --cd <worktree_path>` inside the created session
 - [x] Register zellij session metadata in the owning host's overlay
 - [x] Agent-monitor manages workspace group assignment on the owning host
 - [x] Avoid hard dependencies on devcontainer startup, port allocation, or restore semantics in this phase
