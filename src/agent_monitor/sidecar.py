@@ -11,6 +11,8 @@ from typing import Any
 
 from agent_monitor.models import AgentRun, AgentStatus, ClientName
 
+EPHEMERAL_ERROR_TTL_MS = 24 * 60 * 60 * 1000
+
 
 def default_agent_monitor_dir() -> Path:
     return Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "agent-monitor"
@@ -63,6 +65,37 @@ def read_sidecar_agent_runs(path: str | Path | None = None) -> list[AgentRun]:
     return sorted(runs, key=lambda run: run.id)
 
 
+def prune_ephemeral_sidecar_statuses(
+    path: str | Path | None,
+    *,
+    worktree_ids: set[str],
+    overlay_run_ids: set[str],
+    now_ms: int,
+    error_ttl_ms: int = EPHEMERAL_ERROR_TTL_MS,
+) -> None:
+    """Delete stopped and old error sidecar files with no persisted owner."""
+    runs_dir = Path(path) if path is not None else default_sidecar_runs_dir()
+    if not runs_dir.exists():
+        return
+
+    for status_path in _status_files(runs_dir):
+        raw = _read_json_object(status_path)
+        if raw is None:
+            continue
+        run_id = _optional_str(raw.get("run_id")) or _run_id_from_path(status_path)
+        if not run_id or run_id in overlay_run_ids:
+            continue
+        worktree_id = _optional_str(raw.get("worktree_id")) or _worktree_id_from_run_id(run_id)
+        if worktree_id in worktree_ids:
+            continue
+        status = _enum_value(AgentStatus, raw.get("status"), AgentStatus.UNKNOWN)
+        if status == AgentStatus.STOPPED.value:
+            _remove_status_file(status_path)
+            continue
+        if status == AgentStatus.ERROR.value and _sidecar_age_ms(raw, now_ms) >= error_ttl_ms:
+            _remove_status_file(status_path)
+
+
 def _status_files(runs_dir: Path) -> list[Path]:
     direct_files = [path for path in runs_dir.glob("*.json") if not path.name.startswith(".")]
     nested_files = [
@@ -74,11 +107,8 @@ def _status_files(runs_dir: Path) -> list[Path]:
 
 
 def _read_sidecar_file(path: Path) -> AgentRun | None:
-    try:
-        raw = json.loads(path.read_text())
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(raw, dict):
+    raw = _read_json_object(path)
+    if raw is None:
         return None
 
     run_id = _optional_str(raw.get("run_id")) or _run_id_from_path(path)
@@ -109,6 +139,44 @@ def _read_sidecar_file(path: Path) -> AgentRun | None:
     return AgentRun.from_dict(run_id, payload)
 
 
+def _read_json_object(path: Path) -> dict[str, Any] | None:
+    try:
+        raw = json.loads(path.read_text())
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    if isinstance(raw, dict):
+        return raw
+    return None
+
+
+def _sidecar_age_ms(raw: dict[str, Any], now_ms: int) -> int:
+    timestamps = [
+        value
+        for value in (
+            _optional_int(raw.get("heartbeat_at_ms")),
+            _optional_int(raw.get("updated_at_ms")),
+        )
+        if value is not None
+    ]
+    if not timestamps:
+        return 0
+    return max(0, now_ms - max(timestamps))
+
+
+def _remove_status_file(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return
+    if path.name == "status.json":
+        try:
+            path.parent.rmdir()
+        except OSError:
+            pass
+
+
 def _run_id_from_path(path: Path) -> str | None:
     if path.name == "status.json":
         return path.parent.name
@@ -133,6 +201,15 @@ def _optional_str(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _enum_value(enum_type: type[Enum], value: Any, default: Enum) -> str:

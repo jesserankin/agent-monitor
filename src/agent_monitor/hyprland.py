@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 from collections.abc import Awaitable, Callable
 
 from agent_monitor.models import AgentSession, AgentState, TERMINAL_CLASSES, parse_window_title
@@ -149,6 +150,27 @@ async def fetch_clients() -> list[dict]:
         return []
 
 
+def fetch_clients_sync() -> list[dict]:
+    """Fetch window clients from hyprctl clients -j for synchronous callers."""
+    try:
+        result = subprocess.run(
+            ["hyprctl", "clients", "-j"],
+            capture_output=True,
+            check=True,
+            timeout=5.0,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return []
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    return []
+
+
 async def fetch_active_window() -> str | None:
     """Fetch the currently focused window address via hyprctl activewindow -j.
 
@@ -191,6 +213,12 @@ async def fetch_active_window() -> str | None:
 async def find_zellij_window(session_name: str) -> dict | None:
     """Find a Hyprland terminal window attached to a zellij session."""
     clients = await fetch_clients()
+    return find_zellij_window_in_clients(session_name, clients)
+
+
+def find_zellij_window_sync(session_name: str) -> dict | None:
+    """Find a Hyprland terminal window attached to a zellij session."""
+    clients = fetch_clients_sync()
     return find_zellij_window_in_clients(session_name, clients)
 
 

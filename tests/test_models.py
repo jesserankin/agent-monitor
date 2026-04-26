@@ -115,6 +115,23 @@ class TestV2Models:
         assert run.workspace_group == 3
         assert run.launch["argv"][0] == "codex"
 
+    def test_default_codex_run_for_worktree(self):
+        worktree = Worktree(
+            id="game-engine-v2::refactor",
+            project="game-engine-v2",
+            branch="refactor",
+            path="/repo/game-engine-v2/.worktrees/refactor",
+        )
+
+        run = AgentRun.default_codex_for_worktree(worktree)
+
+        assert run.id == "game-engine-v2::refactor::main"
+        assert run.worktree_id == "game-engine-v2::refactor"
+        assert run.client == ClientName.CODEX
+        assert run.status == AgentStatus.STOPPED
+        assert run.cwd == "/repo/game-engine-v2/.worktrees/refactor"
+        assert run.launch == {}
+
     def test_host_snapshot_round_trip(self):
         snapshot = HostSnapshot.from_dict({
             "host": {"name": "workstation", "transport": "ssh", "hyprland": True},

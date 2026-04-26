@@ -5,12 +5,14 @@ from __future__ import annotations
 import subprocess
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from agent_monitor.clients.codex import CodexTelemetry, CodexTelemetryReader
 from agent_monitor.models import AgentStatus, ClientName
 from agent_monitor.sidecar import sidecar_status_path, write_sidecar_status
+from agent_monitor.zellij import read_context_used_pct_from_pane_titles
 
 
 def current_time_ms() -> int:
@@ -24,10 +26,13 @@ def run_codex_sidecar(
     worktree_id: str | None = None,
     cwd: str | None = None,
     zellij_session: str | None = None,
+    codex_thread_id: str | None = None,
     runs_dir: str | Path | None = None,
     status_path: str | Path | None = None,
     heartbeat_interval: float = 5.0,
+    cleanup_stopped_status: bool = False,
     telemetry_reader: Callable[[], CodexTelemetry | None] | None = None,
+    zellij_context_reader: Callable[[str], float | None] | None = read_context_used_pct_from_pane_titles,
     popen_factory: Callable[..., Any] = subprocess.Popen,
     sleep: Callable[[float], None] = time.sleep,
     now_ms: Callable[[], int] = current_time_ms,
@@ -59,7 +64,7 @@ def run_codex_sidecar(
             exit_code=exit_code,
             error=error,
         )
-        write_sidecar_status(resolved_status_path, payload)
+        _safe_write_status(resolved_status_path, payload)
 
     write_status(AgentStatus.RUNNING)
     try:
@@ -68,7 +73,11 @@ def run_codex_sidecar(
         write_status(AgentStatus.ERROR, exit_code=127, error=str(exc))
         return 127
     if telemetry_reader is None:
-        reader = CodexTelemetryReader(cwd=cwd, process_pid=getattr(process, "pid", None))
+        reader = CodexTelemetryReader(
+            cwd=cwd,
+            thread_id=codex_thread_id,
+            process_pid=getattr(process, "pid", None),
+        )
         telemetry_reader = reader.read
 
     try:
@@ -78,7 +87,13 @@ def run_codex_sidecar(
                 break
             sleep(heartbeat_interval)
             if process.poll() is None:
-                write_status(AgentStatus.RUNNING, telemetry=_read_telemetry(telemetry_reader))
+                telemetry = _read_telemetry(telemetry_reader)
+                telemetry = _with_zellij_context(
+                    telemetry,
+                    zellij_session=zellij_session,
+                    zellij_context_reader=zellij_context_reader,
+                )
+                write_status(AgentStatus.RUNNING, telemetry=telemetry)
     except KeyboardInterrupt:
         process.terminate()
         try:
@@ -92,7 +107,10 @@ def run_codex_sidecar(
         return int(return_code) if return_code is not None else 130
 
     status = AgentStatus.STOPPED if return_code == 0 else AgentStatus.ERROR
-    write_status(status, exit_code=return_code)
+    if status == AgentStatus.STOPPED and cleanup_stopped_status:
+        _remove_status_file(resolved_status_path)
+    else:
+        write_status(status, exit_code=return_code)
     return int(return_code)
 
 
@@ -147,6 +165,43 @@ def _read_telemetry(reader: Callable[[], CodexTelemetry | None]) -> CodexTelemet
         return reader()
     except Exception:
         return None
+
+
+def _with_zellij_context(
+    telemetry: CodexTelemetry | None,
+    *,
+    zellij_session: str | None,
+    zellij_context_reader: Callable[[str], float | None] | None,
+) -> CodexTelemetry | None:
+    if not zellij_session or zellij_context_reader is None:
+        return telemetry
+    try:
+        context_used_pct = zellij_context_reader(zellij_session)
+    except Exception:
+        return telemetry
+    if context_used_pct is None:
+        return telemetry
+    if telemetry is None:
+        return CodexTelemetry(context_used_pct=context_used_pct)
+    return replace(telemetry, context_used_pct=context_used_pct)
+
+
+def _safe_write_status(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        write_sidecar_status(path, payload)
+    except OSError:
+        # Status files are best-effort telemetry. Never let a transient runtime
+        # filesystem failure kill the wrapped Codex process.
+        return
+
+
+def _remove_status_file(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return
 
 
 def _worktree_id_from_run_id(run_id: str) -> str:

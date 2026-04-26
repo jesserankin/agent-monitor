@@ -70,8 +70,9 @@ The local TUI should not hard-code remote implementation details such as `sqlite
 
 ```bash
 agent-monitor host-snapshot --json
-agent-monitor open-run <run-id> --json
+agent-monitor open-run <run-or-worktree-id> --json
 agent-monitor set-group <run-or-worktree-id> <group> --json
+agent-monitor codex [--run-name <name>] [-- <codex-args>]
 agent-monitor restore --json
 ```
 
@@ -113,12 +114,12 @@ Adapters should be optional and independently degradable. Codex status should pr
 ```
 ┌─ Agent Monitor ──────────────────────────────────────────────────┐
 │                                                                   │
-│  Host        WS  Client  Project          Branch          Status  │
-│  ─────────── ─── ─────── ──────────────── ────────────── ───────  │
-│  local       [3] codex   game-engine-v2   combat-ui     active    │
-│  local       [3] claude  game-engine-v2   feature-auth  idle      │
-│  workstation [4] codex   game-engine-v2   npc-dialogue  approval  │
-│  cloud-dev   [ ] codex   other-project    api-refactor  stopped   │
+│  WS  S  Repo                         Port   Ctx             Time  │
+│  ─── ─  ──────────────────────────── ─────  ──────────────  ────  │
+│  3   ⠂  game-engine-v2/combat-ui     4030   ████░░░░░░ 40%  2m    │
+│  3   I  game-engine-v2/feature-auth  9860   █████░░░░░ 50%  6m    │
+│  4   W  game-engine-v2/npc-dialogue         ███████░░░ 70%  1m    │
+│      S  other-project/api-refactor                                  │
 │                                                                   │
 │  [n]ew [Enter]open [a]ssign-ws [d]elete [r]estore  [q]uit        │
 └───────────────────────────────────────────────────────────────────┘
@@ -441,36 +442,56 @@ tidewave_end = 9879
 
 The implementation should not wait for the full devcontainer lifecycle to be stable. Build the observation/control architecture first, using plain host paths and existing zellij sessions where possible. Devcontainer startup, restore, and pane launch behavior should plug into the host adapter later as a capability, not define the core model.
 
-## Current Implementation Status (2026-04-25)
+## Current Implementation Status (2026-04-26)
 
 Implemented and verified unless noted:
 
 - Normalized models exist in `models.py`: `HostSnapshot`, `Worktree`, `AgentRun`, `AgentStatus`, `ClientTelemetry`.
-- `registry.py` reads `~/.config/dev_tools/instances.json`, reads/writes `~/.config/agent-monitor/sessions.json`, and merges stopped worktrees with overlay runs.
+- `registry.py` reads `~/.config/dev_tools/instances.json`, reads/writes `~/.config/agent-monitor/sessions.json`, and merges overlay runs with sidecar status and baseline Codex process discovery.
 - `sidecar.py` reads generic agent-monitor sidecar status files from `$XDG_RUNTIME_DIR/agent-monitor/runs/*/status.json`.
 - `agent-monitor codex-sidecar --run-id ... -- <command>` runs Codex behind a wrapper that writes `running` heartbeats and final `stopped`/`error` status.
 - `agent-monitor host-snapshot --json` returns a normalized local host snapshot.
-- `hosts.py` has a local host adapter with `snapshot`, `set_workspace_group`, and `open_run`. No SSH adapter exists yet.
-- The TUI now renders the v2 table columns: `Host`, `WS`, `Client`, `Project`, `Branch`, `Status`, `Task`.
-- The TUI adds `Context` and `Time` columns when a v2 run or Claude statusline row has telemetry. Codex sidecar `context_used_pct` renders in `Context`; `Time` only renders active turn duration when `status=active` and `active_since_ms` is present.
+- `agent-monitor open-run <run-or-worktree-id> --json` resolves concrete run ids, dev-tools worktree ids, and default `worktree::main` ids, then opens the run through the local host adapter.
+- `agent-monitor set-group <run-or-worktree-id> <group> --json` persists workspace group assignment through the same overlay path used by the TUI.
+- `agent-monitor codex` is a friendly foreground sidecar wrapper for manual starts. It infers the dev-tools worktree from cwd, defaults to `<worktree-id>::main`, reads `$ZELLIJ_SESSION_NAME`, and runs Codex behind the existing sidecar telemetry writer.
+- Codex sidecar telemetry reads explicitly close SQLite connections after each poll, and status-file writes are best-effort so runtime filesystem failures do not kill the wrapped Codex process.
+- Cleanly stopped non-dev-tools `agent-monitor codex` runs delete their runtime sidecar status on exit by default. Snapshot reads also prune stopped sidecar-only rows and old sidecar-only errors, while preserving overlay-backed and dev-tools-backed runs.
+- Local open/group actions reuse an existing Hyprland terminal attached to the run's zellij session when one is visible. `open-run` switches to the saved workspace group, moves/focuses the existing window, and avoids opening a duplicate attach client; `set-group` moves the existing window to the newly assigned group.
+- Runs without a dev-tools worktree still get useful TUI labels from `cwd`: project falls back to the git top-level directory name, and branch falls back to `git branch --show-current` or a short detached HEAD.
+- `config.py` reads `~/.config/agent-monitor/config.toml` remote host entries.
+- `ssh.py` provides a bounded SSH transport for remote `agent-monitor ... --json`
+  commands and local terminal attach helpers for `ssh -t <host> zellij attach`.
+- `hosts.py` has local, SSH, and multi-host adapters. The SSH adapter delegates
+  `host-snapshot`, `open-run`, and `set-group` to the remote helper instead of
+  duplicating registry or sidecar logic locally.
+- `zellij.py` lists active zellij session names independently of process discovery, and the local snapshot uses that to mark saved/default zellij-backed runs as `running` when no sidecar/process state is available.
+- The TUI now renders compact v2 columns: `WS`, `S`, `Repo`, `Port`, `Ctx`, `Time`. A single local host is shown in the title bar instead of per-row, status is a single-letter/spinner column, and repo labels are `project/branch`.
+- Codex sidecar `context_used_pct` renders in `Ctx`; `Time` renders active turn duration for active rows and recent age for idle/waiting rows.
+- Recent idle rows are highlighted orange in `WS`, `S`, and `Repo` for ten minutes; stopped rows are dimmed; active rows use an orange spinner instead of a fixed `A`.
+- Rows sort assigned workspace groups first, then unassigned non-stopped rows, then stopped rows. Rebuilds preserve the selected row key so periodic refreshes do not snap the cursor back to the first row.
 - The TUI still keeps legacy Claude/Hyprland live window rows alongside v2 registry-backed rows.
 - Running Codex processes are discovered through `/proc`, matched by CWD to dev-tools worktrees, and shown as `client=codex`, `status=running`.
 - Codex sidecar status is merged before process discovery and is treated as primary; process discovery no longer downgrades sidecar states such as `waiting_approval` to `running`.
+- Worktree placeholders are now explicit TUI `worktree:<worktree-id>` rows instead of synthetic `AgentRun` rows in the normalized host snapshot. They convert to a default Codex `worktree::main` run only when opening or assigning.
+- Concrete agent runs are now explicit TUI `run:<run-id>` rows. Multiple Codex sidecars in the same worktree with distinct run/thread identities survive merge and render as separate rows.
 - Detected Codex runs also capture their ancestor zellij session when available.
 - `a` assigns a workspace group for a run and persists it in the agent-monitor overlay.
 - `Enter` on a running zellij-backed row first tries to focus an existing Hyprland terminal attached to that zellij session.
+- `Enter` on a worktree row opens the default run for that worktree. `Enter` on a concrete run row opens that exact run/session.
 - If no existing terminal is found, `Enter` opens a terminal attached to the saved zellij session.
 - Fallback terminal creation launches on the middle workspace for the assigned group (`WS 1 -> workspace 11`, `WS 2 -> workspace 12`, etc.) instead of inheriting agent-monitor's floating/shared workspace.
 - `Enter` on a row without a saved zellij session creates a stable zellij session name from the run id, persists it to the overlay, and opens it with `zellij attach --create ... options --default-cwd <worktree-cwd>`.
 - New zellij session creation can now launch an initial client command. It uses the run's persisted `launch.argv` when present, and defaults to `codex --cd <cwd>` for Codex runs. Codex commands are wrapped through `agent-monitor codex-sidecar`.
+- When a dev-tools worktree is marked `containerized`, default Codex launch ensures the shared devcontainer is running, keeps zellij and the sidecar on the host, and runs Codex through `devcontainer exec --workspace-folder <project-root> sh -lc 'cd <container-worktree> && exec codex --cd <container-worktree>'`.
 - Rows with `client=unknown` and no launch command still open as plain zellij rooted in the worktree.
 - `clients/codex.py` reads optional Codex SQLite telemetry from `~/.codex/state_5.sqlite` and `~/.codex/logs_2.sqlite`.
 - `agent-monitor codex-sidecar` polls the Codex telemetry reader while the wrapped process is alive and writes richer sidecar statuses when available.
-- Codex response events currently map `response.created` / `response.in_progress` to `active`, `response.completed` to `idle`, and best-effort approval/input markers to `waiting_approval` / `waiting_input`.
+- Codex response events currently map `response.created` / `response.in_progress` to `active`, `response.completed` to `idle`, and best-effort approval/input markers to `waiting_approval` / `waiting_input`. Explicit approval/input wait markers take precedence over generic active sampling markers.
 - Codex telemetry includes thread id, title, model, token count, updated timestamp, active turn start, and estimated context percentage when those fields are present.
 - Codex sidecar telemetry is keyed by the wrapped process tree's Codex `process_uuid` pid when available, then locks onto the observed thread id so multiple Codex runs in the same cwd do not overwrite each other's title/status.
+- When an overlay run already has `client_ids.codex_thread_id`, `LocalHostAdapter` passes it to `agent-monitor codex-sidecar --codex-thread-id ...`; the telemetry reader prefers that expected thread before cwd fallback so resumed same-cwd runs do not drift to a newer unrelated thread.
 - The telemetry reader is optional and resilient: missing or locked SQLite files fall back to process-lifecycle `running` heartbeats.
-- Full test suite currently passes: `scripts/test` reports `224 passed`.
+- Full test suite currently passes: `scripts/test` reports `303 passed`.
 
 Known manual behavior:
 
@@ -482,11 +503,81 @@ Known manual behavior:
 
 Recommended next slices:
 
-1. **Make row identity less synthetic**: distinguish worktree-level default rows from concrete agent-run rows so multiple Codex runs in one worktree can be represented cleanly.
-2. **Improve Codex identity matching**: pass known thread ids into the wrapper when available so resumed threads do not depend on process-log discovery.
-3. **Harden approval/input wait mapping**: identify stable Codex log/app-server markers for blocked states beyond the current best-effort text matching.
-4. **Add explicit CLI helpers**: `agent-monitor set-group`, `agent-monitor open-run`, and eventually remote-safe JSON responses.
-5. **Remote support**: add config parsing and SSH host adapter once the local command surface is stable.
+1. **Manual SSH verification**: configure a real remote in
+   `~/.config/agent-monitor/config.toml`, verify `host-snapshot`, remote
+   `open-run`, and remote `set-group` from the TUI, and confirm local SSH
+   terminal placement on the saved workspace group.
+2. **TUI remote identity polish**: add explicit host labels or host-aware row
+   keys if same worktree/run ids can appear on multiple hosts.
+3. **Manually verify local CLI lifecycle**: run `agent-monitor open-run ... --json` and `agent-monitor set-group ... --json` against host and devcontainer worktrees as dev-tools container support settles.
+4. **Dev-tools handoff**: defer until dev-tools container support stabilizes, then document or print the matching `agent-monitor open-run ...` command after worktree creation.
+
+### Completed Slice: Local Devcontainer Codex Launch
+
+Goal: make local worktree rows start Codex through the sidecar, including
+devcontainer worktrees, without moving zellij or sidecar state into the
+container.
+
+Implemented points:
+
+- `AgentRun.default_codex_for_worktree` creates a default `worktree::main`
+  Codex run from a dev-tools `Worktree`.
+- The TUI now converts `worktree:<worktree-id>` rows to default Codex runs at
+  open/assign time instead of creating `client=unknown` placeholder runs.
+- `LocalHostAdapter.open_run` looks up the run's dev-tools worktree metadata.
+- For non-containerized Codex runs with no persisted launch command, new zellij
+  sessions launch `agent-monitor codex-sidecar -- codex --cd <host-cwd>`.
+- For containerized Codex runs with no persisted launch command, the adapter
+  first runs `devcontainer up --workspace-folder <project-root>`, then launches
+  a host sidecar that wraps `devcontainer exec`.
+- Container path mapping uses `.devcontainer/devcontainer.json`
+  `workspaceFolder` when present and defaults to `/workspace`, matching the
+  current dev-tools implementation.
+- Tests cover default Codex run creation, TUI worktree-row open behavior, host
+  launch, devcontainer launch command construction, and devcontainer startup
+  failure.
+
+### Completed Slice: Agent Run Identity Cleanup
+
+Goal: keep worktree placeholders and concrete agent runs separate so multiple
+Codex runs in one worktree can be represented without being collapsed by merge
+fallbacks.
+
+Implemented points:
+
+- `build_host_snapshot` now defaults to returning only concrete agent runs in
+  `agent_runs`; stopped worktrees remain represented by `worktrees`.
+- The legacy `include_stopped_worktrees=true` path still exists for callers that
+  explicitly want synthetic stopped `AgentRun` rows.
+- The TUI renders worktrees with no concrete run as `worktree:<worktree-id>` rows.
+- The TUI renders concrete runs as `run:<run-id>` rows.
+- `Enter` and `a` convert a selected worktree row to a default Codex
+  `worktree::main` run at the action boundary, preserving default-run behavior
+  without polluting snapshot merge identity.
+- Sidecar merging still updates an exact run id match, but no longer falls back
+  from a concrete sidecar identity to `worktree_id + client`.
+- Sidecar files with distinct run ids or thread ids in the same worktree now
+  remain separate runs.
+- Tests cover empty worktree rendering, worktree-row open behavior, and two
+  same-worktree Codex sidecars with distinct thread ids.
+
+### Completed Slice: Codex Identity Matching
+
+Goal: when a run already has a known Codex thread id, use that identity before
+falling back to cwd- or process-log discovery.
+
+Implemented points:
+
+- `agent-monitor codex-sidecar` accepts `--codex-thread-id`.
+- `LocalHostAdapter` passes `run.client_ids["codex_thread_id"]` to the sidecar
+  when launching a new Codex-backed zellij session.
+- `CodexTelemetryReader` already accepted an explicit `thread_id`; the sidecar
+  now supplies it.
+- The process-scoped Codex log query now includes rows for the expected thread
+  id as well as process uuid rows. This lets an expected/resumed thread produce
+  status before process correlation is available.
+- Tests cover same-cwd newer-thread collisions and expected-thread behavior
+  before process-log matching has locked onto a pid.
 
 ### Completed Slice: Codex SQLite Live Status Mapping
 
@@ -561,19 +652,208 @@ active Codex session:
 - The manual run moved from `running` to `active` during work and settled on
   `idle` after completion.
 
-### Resume Here: Agent Run Identity Cleanup
+### Completed Slice: Local Command Surface
 
-The next chat should address row identity now that wrapped Codex live status is
-usable:
+Goal: expose the same local run lifecycle path used by the TUI to scripts,
+dev-tools, and future SSH helpers.
 
-1. Distinguish worktree-level default rows from concrete agent-run rows in the
-   normalized model and TUI.
-2. Preserve multiple Codex runs for one worktree instead of merging by
-   `worktree_id + client` when sidecar thread/run identity is available.
-3. Decide how `Enter` should behave on a worktree row versus a concrete run row:
-   create/open default run for the worktree, or attach to the selected run.
-4. Add tests for two Codex sidecar files in the same worktree with distinct
-   run ids/thread ids so both rows survive registry merge and render distinctly.
+Implemented points:
+
+- `agent-monitor open-run <run-or-worktree-id> --json` opens local runs through
+  `LocalHostAdapter.open_run`.
+- `agent-monitor set-group <run-or-worktree-id> <group> --json` persists
+  workspace groups through `LocalHostAdapter.set_workspace_group`.
+- Both commands resolve a concrete run id first, then a bare dev-tools worktree
+  id to the default Codex `worktree::main` run, preferring an existing overlay
+  run when one is already present.
+- Both commands also accept an explicit default run id such as
+  `<project>::<instance>::main` even before that run exists in the overlay.
+- When an attached terminal window already exists for the run's zellij session,
+  `open-run` switches to the saved workspace group and moves/focuses that
+  window instead of opening another terminal. `set-group` moves it to the newly
+  assigned workspace group.
+- `open-run --json` includes an `action` field such as `created_session`,
+  `opened_terminal`, or `focused_existing_window`.
+- `agent-monitor codex` provides the easy manual sidecar path:
+  `cd <worktree> && agent-monitor codex`. It infers worktree/run identity,
+  picks up `$ZELLIJ_SESSION_NAME`, defaults to `codex --cd <cwd>`, and supports
+  named runs with `--run-name`.
+- Manual non-dev-tools sidecar rows are ephemeral by default: clean exits remove
+  the status file, stopped sidecar-only rows are pruned during snapshot reads,
+  and sidecar-only errors expire after a TTL instead of accumulating forever.
+- JSON responses use an `ok: true/false` envelope with command, target, resolved
+  run payload, and stable error codes for remote callers later.
+- Tests cover worktree-id open, existing default-run reuse, default-run-id open,
+  group persistence, invalid group JSON errors, unknown target JSON errors, and
+  `agent-monitor codex` inference/custom-args behavior.
+
+### Completed Slice: TUI Listing Refinement
+
+Goal: make the TUI listing dense enough for daily use while preserving the
+signals needed to identify blocked or active agents quickly.
+
+Implemented points:
+
+- The table now renders `WS`, `S`, `Repo`, `Port`, `Ctx`, and `Time`.
+- Single-host local views show the host in the title/subtitle instead of a
+  per-row column.
+- Project and branch are combined into one `project/branch` repo label.
+- Status is compact: waiting is `W`, running is `R`, idle is `I`, stopped is
+  `S`, errors are `E`, and active rows use an orange spinner.
+- Recent idle rows are highlighted orange in `WS`, `S`, and `Repo` for ten
+  minutes so sessions waiting for follow-up stand out.
+- Stopped rows are dimmed.
+- Port values are shown when dev-tools has a port or Tidewave port, and are
+  bold when `127.0.0.1:<port>` is open.
+- Rows sort assigned workspace groups first, then unassigned non-stopped rows,
+  then stopped rows.
+- Rebuilding the table preserves the selected row key so periodic refreshes do
+  not snap the cursor back to the first row.
+
+### Completed Slice: Codex Wait-State Hardening
+
+Goal: avoid showing a Codex run as active when the latest observed signal says
+it is blocked on approval or user input.
+
+Implemented points:
+
+- Approval/input wait markers now take precedence over generic active sampling
+  markers in the Codex log mapper.
+- Approval request/pending text maps to `waiting_approval`.
+- Pending input markers such as `has_pending_input=true` map to
+  `waiting_input`.
+- `response.completed` and error response events still win over embedded
+  approval/input text so completed turns remain idle/error.
+- Tests cover approval precedence over active sampling and pending-input
+  mapping.
+
+Remaining caveat:
+
+- The precedence is hardened, but the marker list still needs live verification
+  against real wrapped Codex approval/input prompts as Codex log formats evolve.
+
+### Completed Slice: Independent Zellij Session Discovery
+
+Goal: recognize zellij-backed runs even when proc discovery cannot currently
+see the agent client process.
+
+Implemented points:
+
+- `zellij.py` now parses `zellij list-sessions --short --no-formatting`.
+- `build_host_snapshot` merges active zellij session names before process
+  discovery.
+- Overlay runs with a saved active zellij session are promoted from
+  `stopped`/`unknown` to `running` when no sidecar telemetry says otherwise.
+- Worktrees with no concrete run can be represented as the default Codex
+  `worktree::main` run when the expected default zellij session exists.
+- Sidecar-backed stopped/error/idle/waiting states remain authoritative and are
+  not re-promoted by zellij session discovery.
+- Tests cover session-list parsing, overlay promotion, default-run promotion,
+  and stopped sidecar non-promotion.
+
+### Completed Slice: Remote Host Adapter
+
+Goal: add remote-host observation and control on top of the existing local JSON
+command surface, without duplicating registry, sidecar, zellij, workspace-group,
+or devcontainer launch logic locally.
+
+Implemented points:
+
+- `config.py` reads `~/.config/agent-monitor/config.toml` and parses
+  `[[remotes]]` entries with `name`, `host`, and optional
+  `agent_monitor_command`.
+- `ssh.py` adds `SshTransport`, which shells out to:
+  `ssh <host> agent-monitor <args...>` and parses JSON responses with bounded
+  timeouts and explicit transport errors.
+- `ssh.py` also adds local terminal attach helpers for:
+  `ssh -t <host> zellij attach <session>`, including Hyprland workspace
+  placement through the same middle-workspace convention as local attaches.
+- `hosts.SshHostAdapter` implements `snapshot`, `open_run`, and
+  `set_workspace_group` by calling the remote helper commands:
+  `host-snapshot --json`, `open-run <run-id> --json`, and
+  `set-group <run-id> <group> --json`.
+- Remote snapshots are normalized back into `HostSnapshot`; the configured
+  remote name is used as the host name and transport is set to `ssh`.
+- `hosts.MultiHostAdapter` merges local plus configured remote snapshots and
+  routes `open_run` / `set_workspace_group` back to the owning adapter from the
+  latest snapshot.
+- The default TUI adapter is now `configured_host_adapter()`: local-only when no
+  remotes are configured, local-plus-SSH when remotes exist.
+- Remote `open_run` asks the owning host to resolve/open the run through its
+  local command surface, then opens a local SSH terminal attach when the returned
+  run has a zellij session.
+- Tests cover config parsing, SSH command JSON parsing, SSH terminal attach
+  command construction, SSH host adapter snapshot/open/group behavior, and
+  multi-host action routing.
+
+Known limitations:
+
+- This slice is unit-tested but not manually verified against a real remote.
+- The merged TUI still relies on globally unique run/worktree ids. If the same
+  ids appear on multiple hosts, host-aware row keys or visible host labels should
+  be added before relying on those duplicate rows.
+- Remote creation of a brand-new zellij session still depends on the current
+  remote `agent-monitor open-run` behavior. A future helper may need a
+  non-terminal "ensure session" command so SSH attaches never require a remote
+  GUI terminal.
+
+### Resume Here: Manual SSH Verification
+
+The next chat should verify remote support against a real configured host before
+starting dev-tools handoff or devcontainer lifecycle work.
+
+Recommended next-chat scope:
+
+1. Add a real `[[remotes]]` entry to `~/.config/agent-monitor/config.toml`.
+2. Run `agent-monitor host-snapshot --json` locally and through
+   `ssh <host> agent-monitor host-snapshot --json` to compare normalized output.
+3. Launch the TUI and confirm local plus remote rows are visible.
+4. Press `Enter` on a remote row with an existing zellij session and confirm a
+   local terminal opens with `ssh -t <host> zellij attach <session>`.
+5. Assign a workspace group with `a` on a remote row and confirm the remote
+   overlay changes via `ssh <host> agent-monitor set-group ... --json`.
+6. Decide whether duplicate local/remote run ids require host-aware TUI row keys
+   before broader daily use.
+
+Fresh-chat startup prompt:
+
+```text
+Continue docs/v2-unified-session-manager.md from “Resume Here: Manual SSH Verification”.
+Manually verify the new config/SSH host adapter against a real remote. Do not work
+on dev-tools handoff or devcontainer lifecycle yet.
+```
+
+### DevTools Follow-up Task List
+
+Do not duplicate sidecar, zellij, workspace-group, or launch-command logic in
+`../dev-tools`. Dev-tools should remain the worktree/container owner, while
+agent-monitor owns the agent-run overlay and launch lifecycle.
+
+Now that `agent-monitor open-run` exists, update dev-tools as a thin handoff:
+
+1. Document the post-create handoff:
+   `agent-monitor open-run <project>::<instance>` or
+   `agent-monitor open-run <project>::<instance>::main`.
+2. Document the id contract:
+   dev-tools worktree id is `<project>::<instance>`; agent-monitor default run
+   id is `<project>::<instance>::main`.
+3. In `mix dev_tools.create_worktree` completion output, optionally detect
+   whether `agent-monitor` is available on `PATH` and print the matching
+   `agent-monitor open-run ...` command.
+4. If `agent-monitor` is unavailable, keep the current fallback guidance:
+   `cd <worktree>` and start Codex manually.
+   If `agent-monitor` is available but auto-open is disabled, recommend:
+   `cd <worktree> && agent-monitor codex`.
+5. Later, consider `mix dev_tools.create_worktree <branch> --open-agent`, which
+   shells out to `agent-monitor open-run <worktree-id> --json`.
+6. Optionally add a project config toggle such as:
+   ```toml
+   [agent_monitor]
+   enabled = true
+   auto_open = false
+   ```
+7. Keep all actual Codex sidecar wrapping in agent-monitor. Dev-tools should not
+   construct `agent-monitor codex-sidecar -- ...` directly.
 
 ### Completed Slice: Launch Codex on Session Creation
 
@@ -625,10 +905,11 @@ Implemented points:
 ### Phase 2: Local Host Adapter
 - [x] Read dev-tools registry (`~/.config/dev_tools/instances.json`)
 - [x] Read/write agent-monitor overlay
-- [ ] List zellij sessions independently of process discovery
+- [x] List zellij sessions independently of process discovery
 - [x] Inspect terminal/zellij/agent processes where useful
 - [x] Read local Hyprland windows when available for zellij window focus
 - [x] Expose the same `host-snapshot --json` path used by SSH remotes
+- [x] Expose local `open-run ... --json` and `set-group ... --json` helper commands for scripts and future SSH remotes
 
 ### Phase 3: Client Adapters
 - Move current Claude title/statusline parsing behind a Claude adapter
@@ -637,20 +918,22 @@ Implemented points:
 - [x] Add baseline Codex process/zellij/CWD discovery
 - [x] Add Codex adapter with baseline SQLite metadata from `~/.codex/state_5.sqlite`
 - [x] Add optional Codex log-event support that writes sidecar updates for rich live status (`active`, `idle`, `waiting_input`, `waiting_approval`, token usage)
-- [ ] Verify and harden approval/input wait mapping against real wrapped Codex runs
+- [x] Harden approval/input wait mapping so explicit wait markers beat generic active sampling markers
+- [ ] Verify approval/input wait mapping against real wrapped Codex runs
 - Keep unknown/custom clients discoverable by process name, cwd, zellij session, and optional generic monitor JSON
 
 ### Phase 4: SSH Remote Support
-- Config file with remote hosts
-- SSH-based `agent-monitor host-snapshot --json`
-- Remote helper commands for snapshot, open existing run, set-group, and lightweight restore
-- Remote zellij attach (opens local terminal with SSH)
-- Workspace group inherited from remote overlay — same group on both machines
-- `a` key changes pushed back to remote overlay via SSH
+- [x] Config file with remote hosts
+- [x] SSH-based `agent-monitor host-snapshot --json`
+- [x] Remote helper commands for snapshot, open existing run, and set-group
+- [ ] Remote helper command for lightweight restore
+- [x] Remote zellij attach (opens local terminal with SSH)
+- [x] Workspace group inherited from remote overlay — same group on both machines
+- [x] `a` key changes pushed back to remote overlay via SSH
 
 ### Phase 5: Minimal Run Lifecycle
 - [x] Open/focus existing local zellij sessions
-- [ ] Open/focus remote zellij sessions
+- [x] Open/focus remote zellij sessions with local SSH attach for zellij-backed rows
 - [x] Create a plain local zellij session for a run with no saved zellij session
 - [x] Start a plain client run on the owning host, e.g. `codex --cd <worktree_path>` inside the created session
 - [x] Register zellij session metadata in the owning host's overlay
@@ -682,22 +965,23 @@ Implemented points:
 | File | Status | Responsibility |
 |------|--------|---------------|
 | `models.py` | Implemented | Normalized host/worktree/agent-run/client telemetry models |
-| `registry.py` | Implemented | Read dev-tools registry, manage agent-monitor overlay, merge stopped worktrees, sidecar status, and baseline Codex processes |
+| `config.py` | Implemented | Parse local agent-monitor config including remote host definitions |
+| `registry.py` | Implemented | Read dev-tools registry, manage agent-monitor overlay, merge sidecar status and baseline Codex processes while keeping stopped worktrees separate by default |
 | `sidecar.py` | Implemented | Read generic agent-monitor sidecar status files for Codex/devcontainer/custom runs |
-| `hosts.py` | Local only | Host abstraction and local snapshot/open/group commands |
-| `zellij.py` | Partial | Session names, terminal attach commands, middle workspace placement |
+| `hosts.py` | Partial | Local, SSH, and multi-host adapters for snapshot/open/group commands |
+| `zellij.py` | Partial | Session names, active session listing, pane metadata, terminal attach commands, middle workspace placement |
 | `clients/base.py` | Planned | Client adapter protocol and shared status mapping |
 | `clients/claude.py` | Planned | Claude title/statusline adapter |
 | `clients/codex.py` | Partial | Optional Codex SQLite metadata and log-event live status reader |
 | `devcontainer.py` | Planned | Container status checks used for TUI indicators and open-run capabilities |
-| `ssh.py` | Planned | Transport for remote helper commands and remote zellij attach |
+| `ssh.py` | Implemented | Transport for remote helper commands and remote zellij attach |
 | `worktree.py` | Planned | Thin wrapper around `mix dev_tools.create_worktree` / `remove_worktree` via shell or SSH |
 
 ## Files to Modify
 
 | File | Status | Change |
 |------|--------|--------|
-| `app.py` | Partial | Registry-backed v2 rows are present; new/delete/restore and remote display remain |
+| `app.py` | Partial | Registry-backed v2 rows, local helper commands, and configured remote adapters are present; new/delete/restore and remote host-label polish remain |
 | `hyprland.py` | Partial | Window discovery/focus is used for zellij focusing; Claude-specific parsing still exists |
 | `procfs.py` | Partial | Codex process discovery added; client adapters still need to own provider-specific discovery |
 | `statusline.py` | Existing | Move Claude-specific extraction into `clients/claude.py`; add generic monitor-file watcher if needed |

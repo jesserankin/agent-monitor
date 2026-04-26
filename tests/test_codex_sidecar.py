@@ -1,6 +1,7 @@
 """Tests for the Codex sidecar wrapper."""
 
 import json
+from unittest.mock import patch
 
 from agent_monitor.codex_sidecar import run_codex_sidecar
 from agent_monitor.clients.codex import CodexTelemetry
@@ -10,6 +11,7 @@ from agent_monitor.models import AgentStatus
 class FakeProcess:
     def __init__(self, return_code: int = 0) -> None:
         self.return_code = return_code
+        self.pid = 222
         self.poll_count = 0
         self.terminated = False
         self.killed = False
@@ -122,6 +124,42 @@ def test_run_codex_sidecar_writes_error_when_process_fails(tmp_path):
     assert payload["exit_code"] == 2
 
 
+def test_run_codex_sidecar_removes_status_on_clean_cleanup_exit(tmp_path):
+    status_path = tmp_path / "status.json"
+
+    return_code = run_codex_sidecar(
+        run_id="agent-monitor",
+        status_path=status_path,
+        heartbeat_interval=0,
+        command=["codex"],
+        cleanup_stopped_status=True,
+        popen_factory=lambda *_args, **_kwargs: FakeProcess(return_code=0),
+        sleep=lambda _seconds: None,
+        now_ms=lambda: 1000,
+    )
+
+    assert return_code == 0
+    assert not status_path.exists()
+
+
+def test_run_codex_sidecar_keeps_error_when_cleanup_enabled(tmp_path):
+    status_path = tmp_path / "status.json"
+
+    return_code = run_codex_sidecar(
+        run_id="agent-monitor",
+        status_path=status_path,
+        heartbeat_interval=0,
+        command=["codex"],
+        cleanup_stopped_status=True,
+        popen_factory=lambda *_args, **_kwargs: FakeProcess(return_code=2),
+        sleep=lambda _seconds: None,
+        now_ms=lambda: 1000,
+    )
+
+    assert return_code == 2
+    assert json.loads(status_path.read_text())["status"] == AgentStatus.ERROR.value
+
+
 def test_run_codex_sidecar_writes_error_when_launch_fails(tmp_path):
     status_path = tmp_path / "status.json"
 
@@ -141,6 +179,24 @@ def test_run_codex_sidecar_writes_error_when_launch_fails(tmp_path):
     assert payload["status"] == AgentStatus.ERROR.value
     assert payload["exit_code"] == 127
     assert payload["error"] == "missing executable"
+
+
+def test_run_codex_sidecar_status_write_failure_does_not_kill_codex(tmp_path):
+    def failing_write(*_args, **_kwargs):
+        raise OSError("too many open files")
+
+    with patch("agent_monitor.codex_sidecar.write_sidecar_status", side_effect=failing_write):
+        return_code = run_codex_sidecar(
+            run_id="agent-monitor",
+            status_path=tmp_path / "status.json",
+            heartbeat_interval=0,
+            command=["codex"],
+            popen_factory=lambda *_args, **_kwargs: FakeProcess(return_code=0),
+            sleep=lambda _seconds: None,
+            now_ms=lambda: 1000,
+        )
+
+    assert return_code == 0
 
 
 def test_run_codex_sidecar_treats_clean_interrupt_as_stopped(tmp_path):
@@ -199,6 +255,73 @@ def test_run_codex_sidecar_writes_rich_telemetry_when_available(tmp_path):
     assert payload["exit_code"] == 0
 
 
+def test_run_codex_sidecar_prefers_zellij_context_title(tmp_path):
+    status_path = tmp_path / "status.json"
+    process = FakeProcess(return_code=0)
+    process.poll_count = -100
+    payloads = []
+
+    def capture_status(path, payload):
+        payloads.append(payload)
+        path.write_text(json.dumps(payload))
+
+    def sleep(_seconds):
+        payload = json.loads(status_path.read_text())
+        if payload.get("context_used_pct") == 46.0:
+            raise KeyboardInterrupt()
+
+    with patch("agent_monitor.codex_sidecar.write_sidecar_status", side_effect=capture_status):
+        run_codex_sidecar(
+            run_id="project::branch::main",
+            status_path=status_path,
+            zellij_session="project-branch",
+            heartbeat_interval=0,
+            command=["codex"],
+            telemetry_reader=lambda: CodexTelemetry(
+                status=AgentStatus.ACTIVE,
+                context_used_pct=25.0,
+            ),
+            zellij_context_reader=lambda session: 46.0 if session == "project-branch" else None,
+            popen_factory=lambda *_args, **_kwargs: process,
+            sleep=sleep,
+            now_ms=lambda: 3000,
+        )
+
+    assert any(payload.get("context_used_pct") == 46.0 for payload in payloads)
+
+
+def test_run_codex_sidecar_writes_zellij_context_without_sqlite_telemetry(tmp_path):
+    status_path = tmp_path / "status.json"
+    process = FakeProcess(return_code=0)
+    process.poll_count = -100
+    payloads = []
+
+    def capture_status(path, payload):
+        payloads.append(payload)
+        path.write_text(json.dumps(payload))
+
+    def sleep(_seconds):
+        payload = json.loads(status_path.read_text())
+        if payload.get("context_used_pct") == 46.0:
+            raise KeyboardInterrupt()
+
+    with patch("agent_monitor.codex_sidecar.write_sidecar_status", side_effect=capture_status):
+        run_codex_sidecar(
+            run_id="project::branch::main",
+            status_path=status_path,
+            zellij_session="project-branch",
+            heartbeat_interval=0,
+            command=["codex"],
+            telemetry_reader=lambda: None,
+            zellij_context_reader=lambda _session: 46.0,
+            popen_factory=lambda *_args, **_kwargs: process,
+            sleep=sleep,
+            now_ms=lambda: 3000,
+        )
+
+    assert any(payload.get("context_used_pct") == 46.0 for payload in payloads)
+
+
 def test_run_codex_sidecar_active_heartbeat_includes_active_since(tmp_path):
     status_path = tmp_path / "status.json"
     process = FakeProcess(return_code=0)
@@ -225,3 +348,32 @@ def test_run_codex_sidecar_active_heartbeat_includes_active_since(tmp_path):
         sleep=sleep,
         now_ms=lambda: 3000,
     )
+
+
+def test_run_codex_sidecar_passes_known_thread_to_default_reader(tmp_path):
+    status_path = tmp_path / "status.json"
+    captured = {}
+
+    class FakeReader:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def read(self):
+            return None
+
+    with patch("agent_monitor.codex_sidecar.CodexTelemetryReader", FakeReader):
+        run_codex_sidecar(
+            run_id="project::branch::main",
+            cwd="/repo/project/.worktrees/branch",
+            codex_thread_id="thread-123",
+            status_path=status_path,
+            heartbeat_interval=0,
+            command=["codex"],
+            popen_factory=lambda *_args, **_kwargs: FakeProcess(return_code=0),
+            sleep=lambda _seconds: None,
+            now_ms=lambda: 1000,
+        )
+
+    assert captured["cwd"] == "/repo/project/.worktrees/branch"
+    assert captured["thread_id"] == "thread-123"
+    assert captured["process_pid"] == 222

@@ -1,16 +1,20 @@
 """Tests for the Agent Monitor TUI application."""
 
 from unittest.mock import patch
+import subprocess
 
 import pytest
 from textual.widgets import DataTable
 
 from agent_monitor.app import (
     AgentMonitorApp,
+    SPINNER_FRAMES,
     SessionChanged,
     SessionRemoved,
     StatuslineDataChanged,
     _render_duration,
+    _render_context_bar,
+    _render_port,
 )
 from agent_monitor.models import (
     AgentRun,
@@ -30,6 +34,7 @@ class StaticHostAdapter:
         self._snapshot = snapshot or HostSnapshot(host=HostInfo(name="local"))
         self.assigned: list[tuple[str, int]] = []
         self.opened: list[str] = []
+        self.opened_runs: list[AgentRun] = []
         self.open_result = True
 
     def snapshot(self) -> HostSnapshot:
@@ -50,15 +55,34 @@ class StaticHostAdapter:
             launch=run.launch,
             telemetry=run.telemetry,
         )
+        found = False
         self._snapshot.agent_runs = [
             updated if existing.id == run.id else existing
             for existing in self._snapshot.agent_runs
         ]
+        for existing in self._snapshot.agent_runs:
+            if existing.id == run.id:
+                found = True
+                break
+        if not found:
+            self._snapshot.agent_runs.append(updated)
         return updated
 
     def open_run(self, run: AgentRun) -> bool:
         self.opened.append(run.id)
+        self.opened_runs.append(run)
         return self.open_result
+
+
+def test_render_context_bar_clamps_percentage():
+    assert _render_context_bar(125.0).plain == "██████████ 100%"
+    assert _render_context_bar(-10.0).plain == "░░░░░░░░░░ 0%"
+
+
+def test_render_port_marks_open_ports_bold():
+    assert _render_port(4030, is_open=True).plain == "4030"
+    assert _render_port(4030, is_open=True).style == "bold"
+    assert _render_port(4030, is_open=False).style == "dim"
 
 
 def _make_app(snapshot: HostSnapshot | None = None) -> AgentMonitorApp:
@@ -140,11 +164,171 @@ async def test_snapshot_worktree_run_shows_on_mount():
             table = app.query_one("#sessions")
             assert table.row_count == 1
             row = table.get_row_at(0)
-            assert row[0] == "local"
-            assert row[2] == "codex"
-            assert row[3] == "game-engine-v2"
-            assert row[4] == "combat-ui"
-            assert row[5].plain == "stopped"
+            assert row[0].plain == ""
+            assert row[1].plain == "S"
+            assert row[2].plain == "game-engine-v2/combat-ui"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_run_without_worktree_uses_git_cwd_project_and_branch(tmp_path):
+    """Non-dev-tools sidecar runs should still show useful project/branch labels."""
+    repo_path = tmp_path / "agent-monitor"
+    repo_path.mkdir()
+    snapshot = HostSnapshot(
+        host=HostInfo(name="local"),
+        worktrees=[],
+        agent_runs=[
+            AgentRun(
+                id="agent-monitor",
+                worktree_id="agent-monitor",
+                client=ClientName.CODEX,
+                status=AgentStatus.RUNNING,
+                cwd=str(repo_path),
+            )
+        ],
+    )
+    app = _make_app(snapshot)
+
+    def fake_run(command, **_kwargs):
+        if command[-1] == "--show-toplevel":
+            return subprocess.CompletedProcess(command, 0, stdout=f"{repo_path}\n")
+        if command[-1] == "--show-current":
+            return subprocess.CompletedProcess(command, 0, stdout="main\n")
+        raise AssertionError(command)
+
+    with patch("agent_monitor.app.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
+         patch("agent_monitor.app.subprocess.run", side_effect=fake_run), \
+         patch.object(app, "_start_monitor"):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            table = app.query_one("#sessions")
+            row = table.get_row_at(0)
+            assert row[2].plain == "agent-monitor/main"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_worktree_without_run_shows_worktree_row_on_mount():
+    """Worktrees without concrete runs should render as worktree rows."""
+    snapshot = HostSnapshot(
+        host=HostInfo(name="local"),
+        worktrees=[
+            Worktree(
+                id="game-engine-v2::combat-ui",
+                project="game-engine-v2",
+                branch="combat-ui",
+                path="/repo/game-engine-v2/.worktrees/combat-ui",
+            )
+        ],
+        agent_runs=[],
+    )
+    app = _make_app(snapshot)
+    with patch("agent_monitor.app.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
+         patch.object(app, "_start_monitor"):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            table = app.query_one("#sessions")
+            assert table.row_count == 1
+            row = table.get_row_at(0)
+            assert row[0] == ""
+            assert row[1].plain == "S"
+            assert row[2].plain == "game-engine-v2/combat-ui"
+            assert app.sub_title == "local · 1 stopped"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_multiple_runs_for_same_worktree_render_distinct_rows():
+    """Concrete runs in the same worktree should not collapse in the table."""
+    worktree = Worktree(
+        id="game-engine-v2::combat-ui",
+        project="game-engine-v2",
+        branch="combat-ui",
+        path="/repo/game-engine-v2/.worktrees/combat-ui",
+    )
+    snapshot = HostSnapshot(
+        host=HostInfo(name="local"),
+        worktrees=[worktree],
+        agent_runs=[
+            AgentRun(
+                id="game-engine-v2::combat-ui::main",
+                worktree_id=worktree.id,
+                client=ClientName.CODEX,
+                telemetry=ClientTelemetry(title="Main task"),
+            ),
+            AgentRun(
+                id="game-engine-v2::combat-ui::review",
+                worktree_id=worktree.id,
+                client=ClientName.CODEX,
+                telemetry=ClientTelemetry(title="Review task"),
+            ),
+        ],
+    )
+    app = _make_app(snapshot)
+    with patch("agent_monitor.app.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
+         patch.object(app, "_start_monitor"):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            table = app.query_one("#sessions")
+            assert table.row_count == 2
+            repos = {table.get_row_at(index)[2].plain for index in range(table.row_count)}
+            assert repos == {"game-engine-v2/combat-ui"}
+            assert not app._worktree_rows
+
+
+@pytest.mark.asyncio
+async def test_snapshot_refresh_preserves_selected_row():
+    """Periodic snapshot refreshes should not snap the cursor back to the first row."""
+    snapshot = HostSnapshot(
+        host=HostInfo(name="local"),
+        worktrees=[
+            Worktree(
+                id="game-engine-v2::combat-ui",
+                project="game-engine-v2",
+                branch="combat-ui",
+                path="/repo/game-engine-v2/.worktrees/combat-ui",
+            ),
+            Worktree(
+                id="game-engine-v2::save-system",
+                project="game-engine-v2",
+                branch="save-system",
+                path="/repo/game-engine-v2/.worktrees/save-system",
+            ),
+        ],
+        agent_runs=[
+            AgentRun(
+                id="game-engine-v2::combat-ui::main",
+                worktree_id="game-engine-v2::combat-ui",
+                client=ClientName.CODEX,
+            ),
+            AgentRun(
+                id="game-engine-v2::save-system::main",
+                worktree_id="game-engine-v2::save-system",
+                client=ClientName.CODEX,
+            ),
+        ],
+    )
+    app = _make_app(snapshot)
+    with patch("agent_monitor.app.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
+         patch.object(app, "_start_monitor"):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            table = app.query_one("#sessions")
+            table.move_cursor(row=1, scroll=False)
+            selected_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+
+            app._refresh_snapshot_rows()
+            await pilot.pause()
+
+            refreshed_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+            assert table.cursor_row == 1
+            assert refreshed_key == selected_key
 
 
 @pytest.mark.asyncio
@@ -166,11 +350,33 @@ async def test_snapshot_run_with_telemetry_shows_context_and_time_columns():
             await pilot.pause()
 
             table = app.query_one("#sessions")
-            assert len(table.columns) == 9
+            assert len(table.columns) == 6
             row = table.get_row_at(0)
-            assert row[6].plain == "Sidecar task"
-            assert row[7].plain == "███████░░░ 67%"
-            assert row[8].plain == "2m"
+            assert row[1].plain == SPINNER_FRAMES[0]
+            assert row[4].plain == "███████░░░ 67%"
+            assert row[5].plain == "2m"
+
+
+@pytest.mark.asyncio
+async def test_active_snapshot_run_status_spins():
+    snapshot, run = _make_snapshot_run()
+    run.status = AgentStatus.ACTIVE
+    run.telemetry = ClientTelemetry(active_since_ms=1_000_000)
+    app = _make_app(snapshot)
+    with patch("agent_monitor.app.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
+         patch("agent_monitor.app.time.time", return_value=1_125), \
+         patch.object(app, "_start_monitor"):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            table = app.query_one("#sessions")
+            assert table.get_row_at(0)[1].plain == SPINNER_FRAMES[0]
+
+            app._tick_spinners()
+
+            assert table.get_row_at(0)[1].plain == SPINNER_FRAMES[1]
+            assert table.get_row_at(0)[5].plain == "2m"
 
 
 @pytest.mark.asyncio
@@ -187,7 +393,7 @@ async def test_snapshot_running_run_does_not_show_heartbeat_age_as_time():
             await pilot.pause()
 
             table = app.query_one("#sessions")
-            assert len(table.columns) == 7
+            assert len(table.columns) == 6
 
 
 @pytest.mark.asyncio
@@ -209,7 +415,28 @@ async def test_snapshot_terminal_status_does_not_show_running_time():
 
             table = app.query_one("#sessions")
             row = table.get_row_at(0)
-            assert row[8].plain == ""
+            assert row[5].plain == ""
+
+
+@pytest.mark.asyncio
+async def test_recent_idle_run_highlights_workspace_and_repo():
+    snapshot, run = _make_snapshot_run(workspace_group=4)
+    run.status = AgentStatus.IDLE
+    run.telemetry = ClientTelemetry(updated_at_ms=1_000_000)
+    app = _make_app(snapshot)
+    with patch("agent_monitor.app.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
+         patch("agent_monitor.app.time.time", return_value=1_300), \
+         patch.object(app, "_start_monitor"):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            row = app.query_one("#sessions").get_row_at(0)
+            assert row[0].plain == "4"
+            assert row[0].style == "dark_orange"
+            assert row[1].style == "dark_orange"
+            assert row[2].plain == "game-engine-v2/combat-ui"
+            assert row[2].style == "dark_orange"
 
 
 @pytest.mark.asyncio
@@ -228,7 +455,7 @@ async def test_assign_run_workspace_group_updates_snapshot_row():
 
             table = app.query_one("#sessions")
             row = table.get_row_at(0)
-            assert row[1] == "6"
+            assert row[0].plain == "6"
             assert app._host_adapter.assigned == [("game-engine-v2::combat-ui::main", 6)]
 
 
@@ -248,6 +475,7 @@ async def test_open_run_switches_workspace_and_attaches_zellij():
 
             mock_switch.assert_called_once_with(4)
             assert app._host_adapter.opened == ["game-engine-v2::combat-ui::main"]
+            assert app._host_adapter.opened_runs[0].client == ClientName.CODEX
 
 
 @pytest.mark.asyncio
@@ -259,6 +487,7 @@ async def test_open_run_focuses_existing_zellij_window_without_attaching():
          patch.object(app, "_start_monitor"), \
          patch("agent_monitor.app.find_zellij_window", return_value={"address": "abc123", "workspace_id": 14}), \
          patch("agent_monitor.app.switch_to_group") as mock_switch, \
+         patch("agent_monitor.app.move_window_to_workspace") as mock_move, \
          patch("agent_monitor.app.focus_window") as mock_focus:
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -266,6 +495,7 @@ async def test_open_run_focuses_existing_zellij_window_without_attaching():
             await app._open_run(run)
 
             mock_switch.assert_called_once_with(4)
+            mock_move.assert_called_once_with("abc123", 14)
             mock_focus.assert_called_once_with("abc123")
             assert app._host_adapter.opened == []
 
@@ -279,6 +509,7 @@ async def test_open_run_uses_existing_window_workspace_when_run_has_no_group():
          patch.object(app, "_start_monitor"), \
          patch("agent_monitor.app.find_zellij_window", return_value={"address": "abc123", "workspace_id": 14}), \
          patch("agent_monitor.app.switch_to_group") as mock_switch, \
+         patch("agent_monitor.app.move_window_to_workspace") as mock_move, \
          patch("agent_monitor.app.focus_window") as mock_focus:
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -286,6 +517,7 @@ async def test_open_run_uses_existing_window_workspace_when_run_has_no_group():
             await app._open_run(run)
 
             mock_switch.assert_called_once_with(4)
+            mock_move.assert_called_once_with("abc123", 14)
             mock_focus.assert_called_once_with("abc123")
             assert app._host_adapter.opened == []
 
@@ -293,6 +525,39 @@ async def test_open_run_uses_existing_window_workspace_when_run_has_no_group():
 @pytest.mark.asyncio
 async def test_data_table_row_selected_opens_run():
     snapshot, _ = _make_snapshot_run(workspace_group=4, zellij_session="ge-combat-ui")
+    app = _make_app(snapshot)
+    with patch("agent_monitor.app.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
+         patch.object(app, "_start_monitor"), \
+         patch("agent_monitor.app.find_zellij_window", return_value=None), \
+         patch("agent_monitor.app.switch_to_group"):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            table = app.query_one("#sessions", DataTable)
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+            event = DataTable.RowSelected(table, 0, row_key)
+            app.on_data_table_row_selected(event)
+            await pilot.pause(0.3)
+
+            assert app._host_adapter.opened == ["game-engine-v2::combat-ui::main"]
+            assert app._host_adapter.opened_runs[0].client == ClientName.CODEX
+
+
+@pytest.mark.asyncio
+async def test_data_table_row_selected_opens_worktree_default_run():
+    snapshot = HostSnapshot(
+        host=HostInfo(name="local"),
+        worktrees=[
+            Worktree(
+                id="game-engine-v2::combat-ui",
+                project="game-engine-v2",
+                branch="combat-ui",
+                path="/repo/game-engine-v2/.worktrees/combat-ui",
+            )
+        ],
+        agent_runs=[],
+    )
     app = _make_app(snapshot)
     with patch("agent_monitor.app.shutil.which", return_value="/usr/bin/hyprctl"), \
          patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
@@ -408,7 +673,7 @@ async def test_multiple_sessions_sorted_by_group():
             assert table.row_count == 2
             # First row should be group 2 after sort
             row0 = table.get_row_at(0)
-            assert row0[1] == "2"
+            assert row0[0] == "2"
 
 
 @pytest.mark.asyncio
@@ -419,7 +684,7 @@ async def test_subtitle_updates_with_counts():
          patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
          patch.object(app, "_start_monitor"):
         async with app.run_test() as pilot:
-            assert app.sub_title == "No sessions"
+            assert app.sub_title == "local"
 
             app.post_message(SessionChanged(_make_session(state=AgentState.ACTIVE)))
             await pilot.pause()
@@ -447,7 +712,7 @@ async def test_statusline_data_adds_columns():
             await pilot.pause()
 
             table = app.query_one("#sessions")
-            assert len(table.columns) == 7  # Host, WS, Client, Project, Branch, Status, Task
+            assert len(table.columns) == 6
 
             # Post statusline data
             app.post_message(StatuslineDataChanged(
@@ -457,7 +722,7 @@ async def test_statusline_data_adds_columns():
             ))
             await pilot.pause()
 
-            assert len(table.columns) == 9  # + Context, Time
+            assert len(table.columns) == 6
 
 
 @pytest.mark.asyncio
@@ -525,7 +790,7 @@ async def test_statusline_columns_not_duplicated():
             await pilot.pause()
 
             table = app.query_one("#sessions")
-            assert len(table.columns) == 9  # Host, WS, Client, Project, Branch, Status, Task, Context, Time
+            assert len(table.columns) == 6
 
 
 @pytest.mark.asyncio
@@ -732,7 +997,7 @@ async def test_focused_session_has_indicator():
 
             table = app.query_one("#sessions")
             row = table.get_row_at(0)
-            name_cell = row[3]  # Host, WS, Client, Project
+            name_cell = row[2]
             assert name_cell.plain.startswith("\u25b8 ")
             assert "bold" in str(name_cell.style)
 
@@ -751,5 +1016,5 @@ async def test_unfocused_session_no_indicator():
 
             table = app.query_one("#sessions")
             row = table.get_row_at(0)
-            name_cell = row[3]
+            name_cell = row[2]
             assert not name_cell.plain.startswith("\u25b8")

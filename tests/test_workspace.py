@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent_monitor.workspace import focus_window, switch_to_group
+from agent_monitor.workspace import (
+    focus_window,
+    focus_window_sync,
+    move_window_to_workspace,
+    switch_to_group,
+    switch_to_group_sync,
+)
 
 
 class TestSwitchToGroup:
@@ -126,3 +132,61 @@ class TestFocusWindow:
             side_effect=FileNotFoundError("hyprctl not found"),
         ):
             await focus_window("abc123")  # should not raise
+
+
+def test_switch_to_group_sync():
+    with patch("agent_monitor.workspace.subprocess.run") as mock_run:
+        assert switch_to_group_sync(4) is True
+
+    mock_run.assert_called_once_with(
+        ["workspace-group", "4"],
+        capture_output=True,
+        check=True,
+        timeout=3.0,
+    )
+
+
+def test_switch_to_group_sync_rejects_invalid_group():
+    with pytest.raises(ValueError, match="1-9"):
+        switch_to_group_sync(10)
+
+
+def test_switch_to_group_sync_returns_false_on_failure():
+    with patch("agent_monitor.workspace.subprocess.run", side_effect=OSError("missing")):
+        assert switch_to_group_sync(4) is False
+
+
+def test_move_window_to_workspace():
+    with patch("agent_monitor.workspace.subprocess.run") as mock_run:
+        assert move_window_to_workspace("abc123", 14) is True
+
+    mock_run.assert_called_once_with(
+        ["hyprctl", "dispatch", "movetoworkspacesilent", "14,address:0xabc123"],
+        capture_output=True,
+        check=True,
+        timeout=3.0,
+    )
+
+
+def test_move_window_to_workspace_normalizes_address():
+    with patch("agent_monitor.workspace.subprocess.run") as mock_run:
+        assert move_window_to_workspace("0xabc123", 14) is True
+
+    assert mock_run.call_args.args[0][-1] == "14,address:0xabc123"
+
+
+def test_move_window_to_workspace_returns_false_on_failure():
+    with patch("agent_monitor.workspace.subprocess.run", side_effect=OSError("missing")):
+        assert move_window_to_workspace("abc123", 14) is False
+
+
+def test_focus_window_sync():
+    with patch("agent_monitor.workspace.subprocess.run") as mock_run:
+        assert focus_window_sync("abc123") is True
+
+    mock_run.assert_called_once_with(
+        ["hyprctl", "dispatch", "focuswindow", "address:0xabc123"],
+        capture_output=True,
+        check=True,
+        timeout=3.0,
+    )

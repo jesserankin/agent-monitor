@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import json
 import os
 import re
 import shutil
 import shlex
 import subprocess
+
+CONTEXT_USED_TITLE_RE = re.compile(r"\bContext\s+(\d+(?:\.\d+)?)%\s+used\b", re.IGNORECASE)
 
 
 def middle_workspace_for_group(group: int) -> int:
@@ -69,6 +72,74 @@ def zellij_run_command(
     return command
 
 
+def zellij_list_panes_command(session_name: str) -> list[str]:
+    """Build a command that lists panes for a zellij session as JSON."""
+    return ["zellij", "--session", session_name, "action", "list-panes", "--json"]
+
+
+def zellij_list_sessions_command() -> list[str]:
+    """Build a command that lists active zellij session names."""
+    return ["zellij", "list-sessions", "--short", "--no-formatting"]
+
+
+def list_sessions() -> list[str]:
+    """Read active zellij session names, returning an empty list when unavailable."""
+    try:
+        result = subprocess.run(
+            zellij_list_sessions_command(),
+            capture_output=True,
+            check=True,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return []
+
+    output = result.stdout.decode(errors="replace") if isinstance(result.stdout, bytes) else str(result.stdout)
+    return sorted({line.strip() for line in output.splitlines() if line.strip()})
+
+
+def list_panes(session_name: str) -> list[dict]:
+    """Read pane metadata from zellij, returning an empty list when unavailable."""
+    try:
+        result = subprocess.run(
+            zellij_list_panes_command(session_name),
+            capture_output=True,
+            check=True,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return []
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def context_used_pct_from_panes(panes: Sequence[dict]) -> float | None:
+    """Extract Codex context usage from zellij pane titles."""
+    candidates = sorted(
+        (pane for pane in panes if not pane.get("is_plugin")),
+        key=lambda pane: 0 if pane.get("is_focused") else 1,
+    )
+    for pane in candidates:
+        title = pane.get("title")
+        if not isinstance(title, str):
+            continue
+        match = CONTEXT_USED_TITLE_RE.search(title)
+        if match:
+            return _clamp_pct(float(match.group(1)))
+    return None
+
+
+def read_context_used_pct_from_pane_titles(session_name: str) -> float | None:
+    """Read Codex context usage from zellij pane titles when list-panes exists."""
+    return context_used_pct_from_panes(list_panes(session_name))
+
+
 def create_session_with_command(
     session_name: str,
     argv: Sequence[str],
@@ -106,13 +177,18 @@ def terminal_attach_command(
 ) -> list[str] | None:
     """Build a terminal command that attaches to a zellij session."""
     zellij_command = zellij_attach_command(session_name, create=create, cwd=cwd)
+    return terminal_command(zellij_command, terminal=terminal)
+
+
+def terminal_command(command: list[str], terminal: str | None = None) -> list[str] | None:
+    """Build a terminal command that runs an arbitrary argv."""
     terminal = terminal or os.environ.get("AGENT_MONITOR_TERMINAL")
     if terminal:
-        return _terminal_command(terminal, zellij_command)
+        return _terminal_command(terminal, command)
 
     for candidate in ("ghostty", "kitty", "alacritty", "foot", "wezterm"):
         if shutil.which(candidate):
-            return _terminal_command(candidate, zellij_command)
+            return _terminal_command(candidate, command)
     return None
 
 
@@ -153,10 +229,17 @@ def attach_session(
                 f"[workspace {workspace_id}] {shlex.join(command)}",
             ],
             start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         return True
 
-    subprocess.Popen(command, start_new_session=True)
+    subprocess.Popen(
+        command,
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     return True
 
 
@@ -167,3 +250,7 @@ def _terminal_command(terminal: str, command: list[str]) -> list[str]:
     if executable in {"ghostty", "alacritty", "foot"}:
         return [terminal, "-e", *command]
     return [terminal, *command]
+
+
+def _clamp_pct(value: float) -> float:
+    return max(0.0, min(100.0, value))

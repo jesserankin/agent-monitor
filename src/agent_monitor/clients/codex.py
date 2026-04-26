@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,9 @@ MODEL_RE = re.compile(r"\bmodel=([A-Za-z0-9_.:-]+)")
 TOKEN_USAGE_RE = re.compile(r"\btotal_usage_tokens=(\d+)")
 ESTIMATED_TOKEN_RE = re.compile(r"\bestimated_token_count=(?:Some\()?(\d+)\)?")
 AUTO_COMPACT_LIMIT_RE = re.compile(r"\bauto_compact_limit=(\d+)")
+MODEL_CONTEXT_LIMITS = {
+    "gpt-5.5": 384_000,
+}
 
 ACTIVE_RESPONSE_EVENTS = {"response.created", "response.in_progress", "response.output_item.added"}
 IDLE_RESPONSE_EVENTS = {"response.completed"}
@@ -151,7 +155,7 @@ def read_latest_thread_metadata(
         return None
 
     try:
-        with _connect_readonly(path) as conn:
+        with closing(_connect_readonly(path)) as conn:
             row = conn.execute(
                 f"""
                 SELECT id, cwd, title, model, tokens_used, updated_at_ms
@@ -234,15 +238,20 @@ class _LogEvent:
 
 
 def _read_log_rows(path: Path, *, thread_id: str | None, process_pids: set[int] | None, limit: int) -> list[sqlite3.Row]:
-    with _connect_readonly(path) as conn:
+    with closing(_connect_readonly(path)) as conn:
         if process_pids:
             predicates = " OR ".join("process_uuid LIKE ?" for _pid in process_pids)
+            identity_predicate = f"({predicates})"
+            identity_params: tuple[Any, ...] = tuple(f"pid:{pid}:%" for pid in process_pids)
+            if thread_id:
+                identity_predicate = f"(thread_id = ? OR {predicates})"
+                identity_params = (thread_id, *identity_params)
             return list(
                 conn.execute(
                     f"""
                     SELECT id, ts, ts_nanos, thread_id, process_uuid, module_path, feedback_log_body
                     FROM logs
-                    WHERE ({predicates})
+                    WHERE {identity_predicate}
                       AND (
                         thread_id IS NOT NULL
                         OR feedback_log_body LIKE '%cwd=%'
@@ -255,7 +264,7 @@ def _read_log_rows(path: Path, *, thread_id: str | None, process_pids: set[int] 
                     ORDER BY ts DESC, ts_nanos DESC, id DESC
                     LIMIT ?
                     """,
-                    (*[f"pid:{pid}:%" for pid in process_pids], limit),
+                    (*identity_params, limit),
                 )
             )
         if thread_id:
@@ -340,12 +349,9 @@ def _status_from_events(events: list[_LogEvent]) -> CodexLiveStatus:
         active_since_ms = _active_since_ms(events)
 
     model = _latest_regex_group(events, MODEL_RE)
-    tokens_used = _latest_int_regex_group(events, TOKEN_USAGE_RE)
-    estimated_tokens = _latest_int_regex_group(events, ESTIMATED_TOKEN_RE)
-    auto_compact_limit = _latest_int_regex_group(events, AUTO_COMPACT_LIMIT_RE)
-    context_used_pct = None
-    if estimated_tokens is not None and auto_compact_limit:
-        context_used_pct = round((estimated_tokens / auto_compact_limit) * 100, 1)
+    token_events = [event for event in events if _is_token_usage_event(event)]
+    tokens_used = _latest_int_regex_group(token_events, TOKEN_USAGE_RE)
+    context_used_pct = _latest_context_used_pct(token_events, model=model, tokens_used=tokens_used)
 
     return CodexLiveStatus(
         status=status,
@@ -370,12 +376,12 @@ def _status_for_event(event: _LogEvent) -> AgentStatus:
         return AgentStatus.ERROR
     if event.response_event in IDLE_RESPONSE_EVENTS:
         return AgentStatus.IDLE
-    if event.response_event in ACTIVE_RESPONSE_EVENTS or _is_active_turn(event.body):
-        return AgentStatus.ACTIVE
     if _is_waiting_approval(event.body):
         return AgentStatus.WAITING_APPROVAL
     if _is_waiting_input(event.body):
         return AgentStatus.WAITING_INPUT
+    if event.response_event in ACTIVE_RESPONSE_EVENTS or _is_active_turn(event.body):
+        return AgentStatus.ACTIVE
     return AgentStatus.RUNNING
 
 
@@ -432,6 +438,32 @@ def _latest_regex_group(events: list[_LogEvent], pattern: re.Pattern[str]) -> st
 def _latest_int_regex_group(events: list[_LogEvent], pattern: re.Pattern[str]) -> int | None:
     value = _latest_regex_group(events, pattern)
     return int(value) if value is not None else None
+
+
+def _latest_context_used_pct(events: list[_LogEvent], *, model: str | None, tokens_used: int | None) -> float | None:
+    context_limit = _context_limit_for_model(model)
+    if tokens_used is not None and context_limit is not None:
+        return _clamp_context_pct(round((tokens_used / context_limit) * 100, 1))
+
+    estimated_tokens = _latest_int_regex_group(events, ESTIMATED_TOKEN_RE)
+    auto_compact_limit = _latest_int_regex_group(events, AUTO_COMPACT_LIMIT_RE)
+    if estimated_tokens is not None and auto_compact_limit:
+        return _clamp_context_pct(round((estimated_tokens / auto_compact_limit) * 100, 1))
+    return None
+
+
+def _clamp_context_pct(value: float) -> float:
+    return max(0.0, min(100.0, value))
+
+
+def _context_limit_for_model(model: str | None) -> int | None:
+    if model is None:
+        return None
+    return MODEL_CONTEXT_LIMITS.get(model)
+
+
+def _is_token_usage_event(event: _LogEvent) -> bool:
+    return event.module_path == "codex_core::session::turn" and "post sampling token usage" in event.body
 
 
 def _connect_readonly(path: Path) -> sqlite3.Connection:

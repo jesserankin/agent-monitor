@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,8 @@ from typing import Any
 from agent_monitor.hyprland import get_event_socket_path
 from agent_monitor.models import AgentRun, AgentStatus, ClientName, ClientTelemetry, HostInfo, HostSnapshot, Worktree
 from agent_monitor.procfs import find_codex_processes
-from agent_monitor.sidecar import read_sidecar_agent_runs
+from agent_monitor.sidecar import prune_ephemeral_sidecar_statuses, read_sidecar_agent_runs
+from agent_monitor.zellij import list_sessions as list_zellij_sessions, session_name_for_run_id
 
 
 def default_devtools_registry_path() -> Path:
@@ -144,8 +146,9 @@ def build_host_snapshot(
     devtools_registry_path: str | Path | None = None,
     overlay_path: str | Path | None = None,
     sidecar_runs_dir: str | Path | None = None,
-    include_stopped_worktrees: bool = True,
+    include_stopped_worktrees: bool = False,
     include_sidecars: bool = True,
+    include_zellij_sessions: bool = True,
     include_processes: bool = True,
 ) -> HostSnapshot:
     """Build a local normalized snapshot from the registries currently available."""
@@ -153,7 +156,16 @@ def build_host_snapshot(
     runs = read_overlay_agent_runs(overlay_path)
 
     if include_sidecars:
+        prune_ephemeral_sidecar_statuses(
+            sidecar_runs_dir,
+            worktree_ids={worktree.id for worktree in worktrees},
+            overlay_run_ids={run.id for run in runs},
+            now_ms=int(time.time() * 1000),
+        )
         runs = _merge_sidecar_runs(worktrees, runs, read_sidecar_agent_runs(sidecar_runs_dir))
+
+    if include_zellij_sessions:
+        runs = _merge_zellij_sessions(worktrees, runs, list_zellij_sessions())
 
     if include_processes:
         runs = _merge_codex_processes(worktrees, runs, find_codex_processes())
@@ -204,6 +216,44 @@ def _merge_sidecar_runs(
     return merged
 
 
+def _merge_zellij_sessions(
+    worktrees: list[Worktree],
+    runs: list[AgentRun],
+    session_names: list[str],
+) -> list[AgentRun]:
+    if not session_names:
+        return runs
+
+    active_sessions = set(session_names)
+    merged = list(runs)
+    for run in merged:
+        if run.zellij_session not in active_sessions:
+            continue
+        if run.status in {AgentStatus.STOPPED, AgentStatus.UNKNOWN} and not _has_sidecar_telemetry(run):
+            run.status = AgentStatus.RUNNING
+
+    run_worktree_ids = {run.worktree_id for run in merged}
+    for worktree in worktrees:
+        if worktree.id in run_worktree_ids:
+            continue
+        default_run_id = f"{worktree.id}::main"
+        expected_session = session_name_for_run_id(default_run_id)
+        if expected_session not in active_sessions:
+            continue
+        run = AgentRun.default_codex_for_worktree(worktree)
+        run.status = AgentStatus.RUNNING
+        run.zellij_session = expected_session
+        merged.append(run)
+
+    merged.sort(key=lambda item: item.id)
+    return merged
+
+
+def _has_sidecar_telemetry(run: AgentRun) -> bool:
+    telemetry = run.telemetry
+    return telemetry.heartbeat_at_ms is not None or telemetry.updated_at_ms is not None
+
+
 def _find_run_for_sidecar(
     runs: list[AgentRun],
     worktrees: list[Worktree],
@@ -212,9 +262,8 @@ def _find_run_for_sidecar(
     for run in runs:
         if run.id == sidecar_run.id:
             return run
-    for run in runs:
-        if run.worktree_id == sidecar_run.worktree_id and run.client == sidecar_run.client:
-            return run
+    if _has_concrete_sidecar_identity(sidecar_run):
+        return None
     if sidecar_run.cwd:
         worktree = _find_worktree_for_cwd(worktrees, sidecar_run.cwd)
         if worktree is not None:
@@ -222,6 +271,15 @@ def _find_run_for_sidecar(
                 if run.worktree_id == worktree.id and run.client in {sidecar_run.client, ClientName.UNKNOWN}:
                     return run
     return None
+
+
+def _has_concrete_sidecar_identity(run: AgentRun) -> bool:
+    """Whether a sidecar describes a specific run rather than a legacy cwd signal."""
+    if run.client_ids:
+        return True
+    if run.id == f"{run.worktree_id}::main":
+        return True
+    return run.id.startswith(f"{run.worktree_id}::")
 
 
 def _merge_telemetry(existing: ClientTelemetry, incoming: ClientTelemetry) -> ClientTelemetry:

@@ -220,6 +220,16 @@ class AgentRun:
             cwd=worktree.path,
         )
 
+    @classmethod
+    def default_codex_for_worktree(cls, worktree: Worktree) -> "AgentRun":
+        return cls(
+            id=f"{worktree.id}::main",
+            worktree_id=worktree.id,
+            client=ClientName.CODEX,
+            status=AgentStatus.STOPPED,
+            cwd=worktree.path,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         data = _without_none({
             "id": self.id,

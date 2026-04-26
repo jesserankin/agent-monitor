@@ -158,7 +158,7 @@ def test_set_overlay_zellij_session_upserts_run(tmp_path):
 @patch("agent_monitor.registry._hyprland_available", return_value=False)
 @patch("agent_monitor.registry.find_codex_processes", return_value=[])
 @patch("agent_monitor.registry.platform.node", return_value="test-host")
-def test_build_host_snapshot_adds_stopped_runs_for_worktrees(
+def test_build_host_snapshot_keeps_empty_worktrees_out_of_agent_runs(
     mock_node,
     mock_processes,
     mock_hyprland,
@@ -198,8 +198,40 @@ def test_build_host_snapshot_adds_stopped_runs_for_worktrees(
     assert snapshot.host.name == "test-host"
     assert snapshot.host.hyprland is False
     assert [worktree.id for worktree in snapshot.worktrees] == ["project::a", "project::b"]
-    assert {run.id for run in snapshot.agent_runs} == {"project::a::main", "project::b::main"}
-    synthetic = next(run for run in snapshot.agent_runs if run.id == "project::b::main")
+    assert {run.id for run in snapshot.agent_runs} == {"project::a::main"}
+
+
+@patch("agent_monitor.registry._hyprland_available", return_value=False)
+@patch("agent_monitor.registry.find_codex_processes", return_value=[])
+@patch("agent_monitor.registry.platform.node", return_value="test-host")
+def test_build_host_snapshot_can_still_include_legacy_stopped_runs(
+    mock_node,
+    mock_processes,
+    mock_hyprland,
+    tmp_path,
+):
+    devtools_path = tmp_path / "instances.json"
+    overlay_path = tmp_path / "sessions.json"
+    devtools_path.write_text(json.dumps({
+        "instances": {
+            "project::b": {
+                "branch": "b",
+                "worktree_path": ".worktrees/b",
+                "project_root": "/repo/project",
+            },
+        }
+    }))
+    overlay_path.write_text(json.dumps({"agent_runs": {}}))
+
+    snapshot = build_host_snapshot(
+        devtools_registry_path=devtools_path,
+        overlay_path=overlay_path,
+        sidecar_runs_dir=tmp_path / "missing-runs",
+        include_stopped_worktrees=True,
+    )
+
+    assert {run.id for run in snapshot.agent_runs} == {"project::b::main"}
+    synthetic = snapshot.agent_runs[0]
     assert synthetic.status == AgentStatus.STOPPED
     assert synthetic.cwd == "/repo/project/.worktrees/b"
 
@@ -244,11 +276,11 @@ def test_build_host_snapshot_marks_matching_codex_worktree_running(
         sidecar_runs_dir=tmp_path / "missing-runs",
     )
 
-    runs = {run.worktree_id: run for run in snapshot.agent_runs}
-    assert runs["project::a"].client == ClientName.CODEX
-    assert runs["project::a"].status == AgentStatus.RUNNING
-    assert runs["project::a"].zellij_session == "project-a"
-    assert runs["project::b"].status == AgentStatus.STOPPED
+    assert [run.worktree_id for run in snapshot.agent_runs] == ["project::a"]
+    run = snapshot.agent_runs[0]
+    assert run.client == ClientName.CODEX
+    assert run.status == AgentStatus.RUNNING
+    assert run.zellij_session == "project-a"
 
 
 @patch("agent_monitor.registry._hyprland_available", return_value=False)
@@ -423,6 +455,133 @@ def test_build_host_snapshot_stopped_sidecar_is_not_repromoted_by_process_discov
 
 
 @patch("agent_monitor.registry._hyprland_available", return_value=False)
+@patch("agent_monitor.registry.list_zellij_sessions", return_value=["project-a"])
+@patch("agent_monitor.registry.find_codex_processes", return_value=[])
+@patch("agent_monitor.registry.platform.node", return_value="test-host")
+def test_build_host_snapshot_marks_overlay_run_running_when_zellij_session_exists(
+    mock_node,
+    mock_processes,
+    mock_list_zellij_sessions,
+    mock_hyprland,
+    tmp_path,
+):
+    devtools_path = tmp_path / "instances.json"
+    overlay_path = tmp_path / "sessions.json"
+    sidecar_dir = tmp_path / "runs"
+    devtools_path.write_text(json.dumps({
+        "instances": {
+            "project::a": {
+                "branch": "a",
+                "worktree_path": ".worktrees/a",
+                "project_root": "/repo/project",
+            }
+        }
+    }))
+    overlay_path.write_text(json.dumps({
+        "agent_runs": {
+            "project::a::main": {
+                "worktree_id": "project::a",
+                "client": "codex",
+                "zellij_session": "project-a",
+            }
+        }
+    }))
+
+    snapshot = build_host_snapshot(
+        devtools_registry_path=devtools_path,
+        overlay_path=overlay_path,
+        sidecar_runs_dir=sidecar_dir,
+    )
+
+    assert len(snapshot.agent_runs) == 1
+    assert snapshot.agent_runs[0].status == AgentStatus.RUNNING
+
+
+@patch("agent_monitor.registry._hyprland_available", return_value=False)
+@patch("agent_monitor.registry.list_zellij_sessions", return_value=["project-a"])
+@patch("agent_monitor.registry.find_codex_processes", return_value=[])
+@patch("agent_monitor.registry.platform.node", return_value="test-host")
+def test_build_host_snapshot_adds_default_run_for_matching_zellij_session(
+    mock_node,
+    mock_processes,
+    mock_list_zellij_sessions,
+    mock_hyprland,
+    tmp_path,
+):
+    devtools_path = tmp_path / "instances.json"
+    overlay_path = tmp_path / "sessions.json"
+    sidecar_dir = tmp_path / "runs"
+    devtools_path.write_text(json.dumps({
+        "instances": {
+            "project::a": {
+                "branch": "a",
+                "worktree_path": ".worktrees/a",
+                "project_root": "/repo/project",
+            }
+        }
+    }))
+    overlay_path.write_text(json.dumps({"agent_runs": {}}))
+
+    snapshot = build_host_snapshot(
+        devtools_registry_path=devtools_path,
+        overlay_path=overlay_path,
+        sidecar_runs_dir=sidecar_dir,
+    )
+
+    assert len(snapshot.agent_runs) == 1
+    run = snapshot.agent_runs[0]
+    assert run.id == "project::a::main"
+    assert run.client == ClientName.CODEX
+    assert run.status == AgentStatus.RUNNING
+    assert run.zellij_session == "project-a"
+
+
+@patch("agent_monitor.registry._hyprland_available", return_value=False)
+@patch("agent_monitor.registry.list_zellij_sessions", return_value=["project-a"])
+@patch("agent_monitor.registry.find_codex_processes", return_value=[])
+@patch("agent_monitor.registry.platform.node", return_value="test-host")
+def test_build_host_snapshot_does_not_repromote_stopped_sidecar_from_zellij(
+    mock_node,
+    mock_processes,
+    mock_list_zellij_sessions,
+    mock_hyprland,
+    tmp_path,
+):
+    devtools_path = tmp_path / "instances.json"
+    overlay_path = tmp_path / "sessions.json"
+    sidecar_dir = tmp_path / "runs"
+    status_path = sidecar_dir / "project--a--main" / "status.json"
+    devtools_path.write_text(json.dumps({
+        "instances": {
+            "project::a": {
+                "branch": "a",
+                "worktree_path": ".worktrees/a",
+                "project_root": "/repo/project",
+            }
+        }
+    }))
+    overlay_path.write_text(json.dumps({"agent_runs": {}}))
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(json.dumps({
+        "run_id": "project::a::main",
+        "worktree_id": "project::a",
+        "client": "codex",
+        "status": "stopped",
+        "zellij_session": "project-a",
+        "heartbeat_at_ms": 1777160883999,
+    }))
+
+    snapshot = build_host_snapshot(
+        devtools_registry_path=devtools_path,
+        overlay_path=overlay_path,
+        sidecar_runs_dir=sidecar_dir,
+    )
+
+    assert len(snapshot.agent_runs) == 1
+    assert snapshot.agent_runs[0].status == AgentStatus.STOPPED
+
+
+@patch("agent_monitor.registry._hyprland_available", return_value=False)
 @patch("agent_monitor.registry.find_codex_processes", return_value=[])
 @patch("agent_monitor.registry.platform.node", return_value="test-host")
 def test_build_host_snapshot_adds_sidecar_only_run(
@@ -451,6 +610,98 @@ def test_build_host_snapshot_adds_sidecar_only_run(
     assert len(snapshot.agent_runs) == 1
     assert snapshot.agent_runs[0].id == "project::a::review"
     assert snapshot.agent_runs[0].status == AgentStatus.IDLE
+
+
+@patch("agent_monitor.registry._hyprland_available", return_value=False)
+@patch("agent_monitor.registry.find_codex_processes", return_value=[])
+@patch("agent_monitor.registry.platform.node", return_value="test-host")
+def test_build_host_snapshot_preserves_multiple_codex_sidecars_in_same_worktree(
+    mock_node,
+    mock_processes,
+    mock_hyprland,
+    tmp_path,
+):
+    devtools_path = tmp_path / "instances.json"
+    overlay_path = tmp_path / "sessions.json"
+    sidecar_dir = tmp_path / "runs"
+    devtools_path.write_text(json.dumps({
+        "instances": {
+            "project::a": {
+                "branch": "a",
+                "worktree_path": ".worktrees/a",
+                "project_root": "/repo/project",
+            }
+        }
+    }))
+    overlay_path.write_text(json.dumps({
+        "agent_runs": {
+            "project::a::main": {
+                "worktree_id": "project::a",
+                "client": "codex",
+                "workspace_group": 3,
+            }
+        }
+    }))
+    for run_id, thread_id, title in [
+        ("project::a::main", "thread-main", "Main task"),
+        ("project::a::review", "thread-review", "Review task"),
+    ]:
+        status_path = sidecar_dir / run_id.replace("::", "--") / "status.json"
+        status_path.parent.mkdir(parents=True)
+        status_path.write_text(json.dumps({
+            "run_id": run_id,
+            "worktree_id": "project::a",
+            "client": "codex",
+            "status": "idle",
+            "cwd": "/repo/project/.worktrees/a",
+            "thread_id": thread_id,
+            "title": title,
+        }))
+
+    snapshot = build_host_snapshot(
+        devtools_registry_path=devtools_path,
+        overlay_path=overlay_path,
+        sidecar_runs_dir=sidecar_dir,
+    )
+
+    runs = {run.id: run for run in snapshot.agent_runs}
+    assert set(runs) == {"project::a::main", "project::a::review"}
+    assert runs["project::a::main"].workspace_group == 3
+    assert runs["project::a::main"].client_ids["codex_thread_id"] == "thread-main"
+    assert runs["project::a::main"].telemetry.title == "Main task"
+    assert runs["project::a::review"].client_ids["codex_thread_id"] == "thread-review"
+    assert runs["project::a::review"].telemetry.title == "Review task"
+
+
+@patch("agent_monitor.registry._hyprland_available", return_value=False)
+@patch("agent_monitor.registry.find_codex_processes", return_value=[])
+@patch("agent_monitor.registry.platform.node", return_value="test-host")
+def test_build_host_snapshot_prunes_stopped_ephemeral_sidecar(
+    mock_node,
+    mock_processes,
+    mock_hyprland,
+    tmp_path,
+):
+    sidecar_dir = tmp_path / "runs"
+    status_path = sidecar_dir / "agent-monitor--manual--main" / "status.json"
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(json.dumps({
+        "run_id": "agent-monitor::manual::main",
+        "worktree_id": "agent-monitor::manual",
+        "client": "codex",
+        "status": "stopped",
+        "cwd": "/repo/agent-monitor",
+        "heartbeat_at_ms": 1000,
+    }))
+
+    snapshot = build_host_snapshot(
+        devtools_registry_path=tmp_path / "missing-instances.json",
+        overlay_path=tmp_path / "missing-sessions.json",
+        sidecar_runs_dir=sidecar_dir,
+    )
+
+    assert snapshot.agent_runs == []
+    assert not status_path.exists()
 
 
 def test_missing_registry_files_are_empty(tmp_path):

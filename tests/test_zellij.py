@@ -1,17 +1,25 @@
 """Tests for zellij terminal attach helpers."""
 
+import subprocess
 from unittest.mock import patch
 
 import pytest
 
 from agent_monitor.zellij import (
     attach_session,
+    context_used_pct_from_panes,
     create_session_with_command,
+    list_panes,
+    list_sessions,
     middle_workspace_for_group,
+    read_context_used_pct_from_pane_titles,
     session_name_for_run_id,
     terminal_attach_command,
+    terminal_command,
     zellij_create_background_command,
     zellij_attach_command,
+    zellij_list_panes_command,
+    zellij_list_sessions_command,
     zellij_run_command,
 )
 
@@ -66,6 +74,92 @@ def test_zellij_run_command_with_cwd_and_pane_name():
     ]
 
 
+def test_zellij_list_panes_command():
+    assert zellij_list_panes_command("my-session") == [
+        "zellij",
+        "--session",
+        "my-session",
+        "action",
+        "list-panes",
+        "--json",
+    ]
+
+
+def test_zellij_list_sessions_command():
+    assert zellij_list_sessions_command() == [
+        "zellij",
+        "list-sessions",
+        "--short",
+        "--no-formatting",
+    ]
+
+
+def test_list_sessions_parses_short_output():
+    completed = subprocess.CompletedProcess(
+        ["zellij"],
+        0,
+        stdout=b"project-a\n\nproject-b\nproject-a\n",
+    )
+    with patch("agent_monitor.zellij.subprocess.run", return_value=completed) as mock_run:
+        assert list_sessions() == ["project-a", "project-b"]
+
+    mock_run.assert_called_once_with(
+        zellij_list_sessions_command(),
+        capture_output=True,
+        check=True,
+        timeout=2.0,
+    )
+
+
+def test_list_sessions_returns_empty_when_unavailable():
+    with patch("agent_monitor.zellij.subprocess.run", side_effect=FileNotFoundError):
+        assert list_sessions() == []
+
+
+def test_list_panes_parses_json():
+    completed = subprocess.CompletedProcess(
+        ["zellij"],
+        0,
+        stdout=b'[{"id":1,"title":"agent-monitor | Context 46% used"}]',
+    )
+    with patch("agent_monitor.zellij.subprocess.run", return_value=completed) as mock_run:
+        assert list_panes("my-session") == [{"id": 1, "title": "agent-monitor | Context 46% used"}]
+
+    mock_run.assert_called_once_with(
+        zellij_list_panes_command("my-session"),
+        capture_output=True,
+        check=True,
+        timeout=2.0,
+    )
+
+
+def test_list_panes_returns_empty_when_unavailable():
+    with patch("agent_monitor.zellij.subprocess.run", side_effect=FileNotFoundError):
+        assert list_panes("my-session") == []
+
+
+def test_context_used_pct_from_panes_prefers_focused_terminal_title():
+    panes = [
+        {"is_plugin": False, "is_focused": False, "title": "other | Context 20% used"},
+        {"is_plugin": True, "is_focused": True, "title": "plugin | Context 90% used"},
+        {"is_plugin": False, "is_focused": True, "title": "agent-monitor | Context 46% used"},
+    ]
+
+    assert context_used_pct_from_panes(panes) == 46.0
+
+
+def test_context_used_pct_from_panes_clamps_value():
+    assert context_used_pct_from_panes([{"title": "agent-monitor | Context 146% used"}]) == 100.0
+
+
+def test_read_context_used_pct_from_pane_titles():
+    with patch(
+        "agent_monitor.zellij.list_panes",
+        return_value=[{"is_plugin": False, "title": "agent-monitor | Context 46% used"}],
+    ):
+        assert read_context_used_pct_from_pane_titles("my-session") == 46.0
+
+
 def test_middle_workspace_for_group():
     assert middle_workspace_for_group(1) == 11
     assert middle_workspace_for_group(9) == 19
@@ -83,6 +177,19 @@ def test_terminal_attach_command_for_ghostty():
         "zellij",
         "attach",
         "my-session",
+    ]
+
+
+def test_terminal_command_for_arbitrary_argv():
+    assert terminal_command(["ssh", "-t", "host", "zellij", "attach", "s"], terminal="ghostty") == [
+        "ghostty",
+        "-e",
+        "ssh",
+        "-t",
+        "host",
+        "zellij",
+        "attach",
+        "s",
     ]
 
 
@@ -139,6 +246,8 @@ def test_attach_session_launches_terminal():
         mock_popen.assert_called_once_with(
             ["ghostty", "-e", "zellij", "attach", "s"],
             start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
 
@@ -155,6 +264,8 @@ def test_attach_session_launches_terminal_on_middle_workspace():
                 "[workspace 11] ghostty -e zellij attach s",
             ],
             start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
 
@@ -181,6 +292,8 @@ def test_attach_session_creates_session_with_launch_command_then_attaches():
         mock_popen.assert_called_once_with(
             ["ghostty", "-e", "zellij", "attach", "s"],
             start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
 

@@ -8,6 +8,8 @@ import json
 import logging
 import os
 import shutil
+import socket
+import subprocess
 import sys
 import time
 
@@ -21,7 +23,7 @@ from textual.widgets import DataTable, Footer, Header, Input, Label
 from textual.worker import Worker, WorkerState
 
 from agent_monitor.codex_sidecar import run_codex_sidecar
-from agent_monitor.hosts import HostAdapter, LocalHostAdapter
+from agent_monitor.hosts import HostAdapter, LocalHostAdapter, configured_host_adapter
 from agent_monitor.hyprland import HyprlandMonitor, find_zellij_window, get_event_socket_path
 from agent_monitor.models import (
     BRAILLE_SPINNER_CHARS,
@@ -29,15 +31,20 @@ from agent_monitor.models import (
     AgentSession,
     AgentState,
     AgentStatus,
+    ClientTelemetry,
+    HostInfo,
     HostSnapshot,
     Worktree,
 )
 
 SPINNER_FRAMES = list(BRAILLE_SPINNER_CHARS)  # [⠂, ⠐]
+from agent_monitor.registry import read_devtools_worktrees
 from agent_monitor.statusline import StatuslineWatcher
-from agent_monitor.workspace import focus_window, switch_to_group
+from agent_monitor.workspace import focus_window, move_window_to_workspace, switch_to_group
+from agent_monitor.zellij import middle_workspace_for_group
 
 logger = logging.getLogger(__name__)
+IDLE_RECENT_MS = 10 * 60 * 1000
 
 
 class SessionChanged(Message):
@@ -127,6 +134,7 @@ def _render_duration(duration_ms: int) -> str:
 
 def _render_context_bar(pct: float) -> Text:
     """Render a context usage bar with color coding."""
+    pct = max(0.0, min(100.0, pct))
     filled = round(pct / 10)
     bar = "\u2588" * filled + "\u2591" * (10 - filled)
     label = f" {pct:.0f}%"
@@ -147,22 +155,107 @@ def _truncate(value: str, limit: int = 60) -> str:
     return value[: limit - 3] + "..."
 
 
-def _run_has_extra_telemetry(run: AgentRun) -> bool:
-    telemetry = run.telemetry
-    return (
-        telemetry.context_used_pct is not None
-        or (run.status == AgentStatus.ACTIVE and telemetry.active_since_ms is not None)
-    )
-
-
 def _render_run_time(run: AgentRun) -> Text:
-    if run.status != AgentStatus.ACTIVE:
-        return Text("")
     telemetry = run.telemetry
-    if telemetry.active_since_ms is not None:
+    if run.status == AgentStatus.ACTIVE and telemetry.active_since_ms is not None:
         now_ms = int(time.time() * 1000)
         return Text(_render_duration(max(0, now_ms - telemetry.active_since_ms)))
+    if run.status in {AgentStatus.IDLE, AgentStatus.WAITING_INPUT, AgentStatus.WAITING_APPROVAL}:
+        updated_at_ms = telemetry.updated_at_ms or telemetry.heartbeat_at_ms
+        if updated_at_ms is not None:
+            now_ms = int(time.time() * 1000)
+            return Text(_render_duration(max(0, now_ms - updated_at_ms)))
     return Text("")
+
+
+def _project_branch_from_cwd(cwd: str) -> tuple[str, str]:
+    project_root = _git_output(cwd, ["rev-parse", "--show-toplevel"])
+    project = os.path.basename(project_root) if project_root else os.path.basename(cwd)
+    branch = _git_output(cwd, ["branch", "--show-current"])
+    if not branch:
+        branch = _git_output(cwd, ["rev-parse", "--short", "HEAD"])
+    return project, branch
+
+
+def _git_output(cwd: str, args: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", cwd, *args],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return ""
+    return result.stdout.strip()
+
+
+def _repo_label(project: str, branch: str) -> str:
+    if project and branch:
+        return f"{project}/{branch}"
+    return project or branch
+
+
+def _render_port(port: int | None, *, is_open: bool | None = None) -> Text:
+    if port is None:
+        return Text("")
+    if is_open is None:
+        is_open = _is_port_open(port)
+    style = "bold" if is_open else "dim"
+    return Text(str(port), style=style)
+
+
+def _is_port_open(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.05):
+            return True
+    except OSError:
+        return False
+
+
+def _port_for_worktree(worktree: Worktree | None) -> int | None:
+    if worktree is None:
+        return None
+    return worktree.port or worktree.tidewave_port
+
+
+def _is_recent_idle(telemetry: ClientTelemetry) -> bool:
+    updated_at_ms = telemetry.updated_at_ms or telemetry.heartbeat_at_ms
+    if updated_at_ms is None:
+        return False
+    now_ms = int(time.time() * 1000)
+    return 0 <= now_ms - updated_at_ms <= IDLE_RECENT_MS
+
+
+def _run_sort_key(run: AgentRun) -> tuple:
+    assigned_rank = 0 if run.workspace_group is not None else 1
+    if run.status == AgentStatus.STOPPED:
+        assigned_rank = 2 if run.workspace_group is None else assigned_rank
+    status_rank = {
+        AgentStatus.WAITING_INPUT: 0,
+        AgentStatus.WAITING_APPROVAL: 0,
+        AgentStatus.ACTIVE: 1,
+        AgentStatus.IDLE: 2,
+        AgentStatus.RUNNING: 3,
+        AgentStatus.ERROR: 4,
+        AgentStatus.STOPPED: 5,
+    }.get(run.status, 6)
+    group = run.workspace_group if run.workspace_group is not None else 99
+    return (assigned_rank, group, status_rank, run.worktree_id, run.id)
+
+
+def _worktree_sort_key(worktree: Worktree) -> tuple:
+    return (2, 99, 5, worktree.project, worktree.branch)
+
+
+def _session_sort_key(session: AgentSession) -> tuple:
+    status_rank = {
+        AgentState.ATTENTION: 0,
+        AgentState.ACTIVE: 1,
+        AgentState.IDLE: 2,
+    }[session.state]
+    return (0, session.workspace_group, status_rank, session.session_name, session.address)
 
 
 class AgentMonitorApp(App):
@@ -177,18 +270,18 @@ class AgentMonitorApp(App):
 
     def __init__(self, host_adapter: HostAdapter | None = None) -> None:
         super().__init__()
-        self._host_adapter = host_adapter or LocalHostAdapter()
+        self._host_adapter = host_adapter or configured_host_adapter()
         self._snapshot: HostSnapshot | None = None
         self._worktrees: dict[str, Worktree] = {}
         self._snapshot_runs: dict[str, AgentRun] = {}
+        self._worktree_rows: dict[str, Worktree] = {}
         self._monitor: HyprlandMonitor | None = None
         self._watcher: StatuslineWatcher | None = None
         self._workspace_group_available: bool = True
         self._sessions: dict[str, AgentSession] = {}
         self._statusline_data: dict[str, dict] = {}
-        self._telemetry_columns_added: bool = False
-        self._group_col_key = None
         self._spinner_frame: int = 0
+        self._cwd_project_branch_cache: dict[str, tuple[str, str]] = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -198,8 +291,7 @@ class AgentMonitorApp(App):
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
         table.cursor_type = "row"
-        col_keys = table.add_columns("Host", "WS", "Client", "Project", "Branch", "Status", "Task")
-        self._group_col_key = col_keys[1]
+        table.add_columns("WS", "S", "Repo", "Port", "Ctx", "Time")
 
         # Prerequisite checks
         if not shutil.which("hyprctl"):
@@ -267,45 +359,33 @@ class AgentMonitorApp(App):
         self._snapshot = snapshot
         self._worktrees = {worktree.id: worktree for worktree in snapshot.worktrees}
         self._snapshot_runs = {self._run_row_key(run.id): run for run in snapshot.agent_runs}
-        if any(_run_has_extra_telemetry(run) for run in snapshot.agent_runs):
-            self._ensure_telemetry_columns()
-
-        table = self.query_one(DataTable)
-        next_keys = set(self._snapshot_runs)
-        for row_key in [str(key.value) for key in table.rows if str(key.value).startswith("run:")]:
-            if row_key not in next_keys:
-                table.remove_row(row_key)
-
-        for row_key, run in self._snapshot_runs.items():
-            row_data = self._render_run_row(snapshot, run)
-            self._upsert_row(row_key, row_data)
-
-        table.sort(self._group_col_key)
+        run_worktree_ids = {run.worktree_id for run in snapshot.agent_runs}
+        self._worktree_rows = {
+            self._worktree_row_key(worktree.id): worktree
+            for worktree in snapshot.worktrees
+            if worktree.id not in run_worktree_ids
+        }
+        self._rebuild_table()
         self._update_subtitle()
-
-    def _upsert_row(self, row_key: str, row_data: tuple) -> None:
-        table = self.query_one(DataTable)
-        if row_key in table.rows:
-            row_idx = table.get_row_index(row_key)
-            for col_idx, value in enumerate(row_data):
-                table.update_cell_at((row_idx, col_idx), value)
-        else:
-            table.add_row(*row_data, key=row_key)
 
     @staticmethod
     def _run_row_key(run_id: str) -> str:
         return f"run:{run_id}"
 
     @staticmethod
+    def _worktree_row_key(worktree_id: str) -> str:
+        return f"worktree:{worktree_id}"
+
+    @staticmethod
     def _session_row_key(address: str) -> str:
         return f"window:{address}"
 
     def _tick_spinners(self) -> None:
-        """Animate spinner and update live duration for all ACTIVE sessions."""
+        """Animate spinner and update live duration for active rows."""
         self._spinner_frame = (self._spinner_frame + 1) % len(SPINNER_FRAMES)
         char = SPINNER_FRAMES[self._spinner_frame]
         table = self.query_one(DataTable)
-        status_col = 5  # Host, WS, Client, Project, Branch, Status
+        status_col = 1  # WS, S, Repo, Port
 
         for addr, session in self._sessions.items():
             row_key = self._session_row_key(addr)
@@ -316,13 +396,25 @@ class AgentMonitorApp(App):
                     Text(char, style="dark_orange"),
                 )
                 # Update live duration
-                if self._telemetry_columns_added and session.active_since is not None:
-                    time_col = 8  # Host, WS, Client, Project, Branch, Status, Task, Context, Time
+                if session.active_since is not None:
+                    time_col = 5  # WS, S, Repo, Port, Ctx, Time
                     elapsed_ms = int((time.monotonic() - session.active_since) * 1000)
                     table.update_cell_at(
                         (row_idx, time_col),
                         Text(_render_duration(elapsed_ms)),
                     )
+
+        for row_key, run in self._snapshot_runs.items():
+            if run.status == AgentStatus.ACTIVE and row_key in table.rows:
+                row_idx = table.get_row_index(row_key)
+                table.update_cell_at(
+                    (row_idx, status_col),
+                    Text(char, style="dark_orange"),
+                )
+                table.update_cell_at(
+                    (row_idx, 5),
+                    _render_run_time(run),
+                )
 
     async def _full_refresh(self) -> None:
         """Periodic full refresh via registries and hyprctl clients."""
@@ -359,22 +451,15 @@ class AgentMonitorApp(App):
             self._apply_statusline_to_session(session, sl_data)
 
         self._sessions[session.address] = session
-        table = self.query_one(DataTable)
-
-        row_data = self._render_row(session)
-        self._upsert_row(self._session_row_key(session.address), row_data)
-
-        table.sort(self._group_col_key)
+        self._rebuild_table()
         self._update_subtitle()
 
     def on_session_removed(self, message: SessionRemoved) -> None:
         """Handle a session removal."""
         self._sessions.pop(message.address, None)
-        table = self.query_one(DataTable)
         row_key = self._session_row_key(message.address)
-
-        if row_key in table.rows:
-            table.remove_row(row_key)
+        _ = row_key
+        self._rebuild_table()
 
         self._update_subtitle()
 
@@ -408,9 +493,6 @@ class AgentMonitorApp(App):
 
         self._statusline_data[name] = message.data
 
-        # Ensure dynamic columns exist
-        self._ensure_telemetry_columns()
-
         # Find matching session and update it
         matched = self._find_session_for_statusline(name, message.data)
         if matched:
@@ -437,51 +519,58 @@ class AgentMonitorApp(App):
 
     def _update_row(self, session: AgentSession) -> None:
         """Re-render a single session row in the DataTable."""
-        table = self.query_one(DataTable)
-        row_key = self._session_row_key(session.address)
-        if row_key not in table.rows:
-            return
-        row_data = self._render_row(session)
-        row_idx = table.get_row_index(row_key)
-        for col_idx, value in enumerate(row_data):
-            table.update_cell_at((row_idx, col_idx), value)
-
-    def _ensure_telemetry_columns(self) -> None:
-        """Ensure optional telemetry columns exist."""
-        if self._telemetry_columns_added:
-            return
-        table = self.query_one(DataTable)
-        table.add_columns("Context", "Time")
-        self._telemetry_columns_added = True
+        _ = session
+        self._rebuild_table()
 
     def _render_run_row(self, snapshot: HostSnapshot, run: AgentRun) -> tuple:
         """Render a registry-backed agent run into DataTable cell values."""
         worktree = self._worktrees.get(run.worktree_id)
-        project = worktree.project if worktree else ""
-        branch = worktree.branch if worktree else ""
-        task = run.telemetry.title or ""
-        if not task and run.cwd:
-            task = os.path.basename(run.cwd)
-
-        base = (
-            snapshot.host.name,
-            str(run.workspace_group) if run.workspace_group is not None else "",
-            "" if run.client.value == "unknown" else run.client.value,
-            project,
-            branch,
-            self._render_status(run.status),
-            Text(_truncate(task)),
+        project, branch = self._project_branch_for_run(run, worktree)
+        row_style = ""
+        if run.status == AgentStatus.STOPPED:
+            row_style = "dim"
+        elif run.status == AgentStatus.IDLE and _is_recent_idle(run.telemetry):
+            row_style = "dark_orange"
+        ws = Text(str(run.workspace_group) if run.workspace_group is not None else "", style=row_style)
+        repo = Text(_truncate(_repo_label(project, branch), 48), style=row_style)
+        context = (
+            _render_context_bar(run.telemetry.context_used_pct)
+            if run.telemetry.context_used_pct is not None
+            else Text("")
+        )
+        return (
+            ws,
+            self._render_status(run.status, telemetry=run.telemetry),
+            repo,
+            _render_port(_port_for_worktree(worktree)),
+            context,
+            _render_run_time(run),
         )
 
-        if self._telemetry_columns_added:
-            context = (
-                _render_context_bar(run.telemetry.context_used_pct)
-                if run.telemetry.context_used_pct is not None
-                else Text("")
-            )
-            return base + (context, _render_run_time(run))
+    def _project_branch_for_run(self, run: AgentRun, worktree: Worktree | None) -> tuple[str, str]:
+        if worktree is not None:
+            return worktree.project, worktree.branch
+        if not run.cwd:
+            return "", ""
+        cwd = os.path.realpath(os.path.expanduser(run.cwd))
+        cached = self._cwd_project_branch_cache.get(cwd)
+        if cached is not None:
+            return cached
+        value = _project_branch_from_cwd(cwd)
+        self._cwd_project_branch_cache[cwd] = value
+        return value
 
-        return base
+    def _render_worktree_row(self, snapshot: HostSnapshot, worktree: Worktree) -> tuple:
+        """Render a worktree without a concrete agent run."""
+        _ = snapshot
+        return (
+            "",
+            self._render_status(AgentStatus.STOPPED),
+            Text(_truncate(_repo_label(worktree.project, worktree.branch), 48), style="dim"),
+            _render_port(_port_for_worktree(worktree)),
+            Text(""),
+            Text(""),
+        )
 
     def _render_row(self, session: AgentSession) -> tuple:
         """Render a session into DataTable cell values."""
@@ -489,54 +578,86 @@ class AgentMonitorApp(App):
         focus_prefix = "\u25b8 " if session.is_focused else ""
 
         if session.state == AgentState.ATTENTION:
-            status = Text("\U0001f514", style="bold yellow")
             name_style = "bold yellow" if not session.is_focused else "bold underline yellow"
             name = Text(f"{focus_prefix}{session.session_name}", style=name_style)
-            task_text = session.task_description
-            task_style = "bold"
         elif session.state == AgentState.ACTIVE:
-            status = Text(SPINNER_FRAMES[self._spinner_frame], style="dark_orange")
             name_style = "dim" if not session.is_focused else "bold"
             name = Text(f"{focus_prefix}{session.session_name}", style=name_style)
-            task_text = session.task_description
-            task_style = "dim"
         else:
-            status = Text("\u2733", style="")
             name_style = "" if not session.is_focused else "bold"
             name = Text(f"{focus_prefix}{session.session_name}", style=name_style)
-            task_text = session.task_description
-            task_style = ""
 
-        task_styled = Text(_truncate(task_text), style=task_style)
+        context = _render_context_bar(session.context_used_pct) if session.context_used_pct is not None else Text("")
+        if session.active_since is not None:
+            elapsed_ms = int((time.monotonic() - session.active_since) * 1000)
+            duration = Text(_render_duration(elapsed_ms))
+        else:
+            duration = Text("")
+        return (
+            str(group),
+            self._render_session_status(session),
+            name,
+            Text(""),
+            context,
+            duration,
+        )
 
-        base = ("local", str(group), "claude", name, "", status, task_styled)
-
-        if self._telemetry_columns_added:
-            context = _render_context_bar(session.context_used_pct) if session.context_used_pct is not None else Text("")
-            if session.active_since is not None:
-                elapsed_ms = int((time.monotonic() - session.active_since) * 1000)
-                duration = Text(_render_duration(elapsed_ms))
-            else:
-                duration = Text("")
-            return base + (context, duration)
-
-        return base
-
-    @staticmethod
-    def _render_status(status: AgentStatus) -> Text:
+    def _render_status(self, status: AgentStatus, *, telemetry: ClientTelemetry | None = None) -> Text:
         if status == AgentStatus.STOPPED:
-            return Text("stopped", style="dim")
+            return Text("S", style="dim")
         if status == AgentStatus.ACTIVE:
-            return Text("active", style="dark_orange")
+            return Text(SPINNER_FRAMES[self._spinner_frame], style="dark_orange")
         if status in {AgentStatus.WAITING_INPUT, AgentStatus.WAITING_APPROVAL}:
-            return Text(status.value, style="bold yellow")
+            return Text("W", style="bold yellow")
         if status == AgentStatus.ERROR:
-            return Text("error", style="bold red")
+            return Text("E", style="bold red")
         if status == AgentStatus.IDLE:
-            return Text("idle")
+            if telemetry is not None and _is_recent_idle(telemetry):
+                return Text("I", style="dark_orange")
+            return Text("I")
         if status == AgentStatus.RUNNING:
-            return Text("running")
-        return Text("unknown", style="dim")
+            return Text("R")
+        return Text("?", style="dim")
+
+    def _render_session_status(self, session: AgentSession) -> Text:
+        if session.state == AgentState.ATTENTION:
+            return Text("W", style="bold yellow")
+        if session.state == AgentState.ACTIVE:
+            return Text(SPINNER_FRAMES[self._spinner_frame], style="dark_orange")
+        return Text("I")
+
+    def _rebuild_table(self) -> None:
+        table = self.query_one(DataTable)
+        selected_row_key = None
+        selected_row_index = table.cursor_row
+        if table.row_count and table.is_valid_coordinate(table.cursor_coordinate):
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+            selected_row_key = str(row_key.value)
+
+        rows: list[tuple[str, tuple, tuple]] = []
+        snapshot = self._snapshot or HostSnapshot(host=HostInfo(name="local"))
+
+        for address, session in self._sessions.items():
+            row_key = self._session_row_key(address)
+            rows.append((row_key, self._render_row(session), _session_sort_key(session)))
+
+        for row_key, run in self._snapshot_runs.items():
+            rows.append((row_key, self._render_run_row(snapshot, run), _run_sort_key(run)))
+
+        for row_key, worktree in self._worktree_rows.items():
+            rows.append((row_key, self._render_worktree_row(snapshot, worktree), _worktree_sort_key(worktree)))
+
+        rows.sort(key=lambda item: item[2])
+        table.clear(columns=False)
+        for row_key, row_data, _sort_key in rows:
+            table.add_row(*row_data, key=row_key)
+        if table.row_count == 0:
+            return
+        if selected_row_key in table.rows:
+            selected_row_index = table.get_row_index(selected_row_key)
+        else:
+            selected_row_index = min(selected_row_index, table.row_count - 1)
+        table.move_cursor(row=selected_row_index, column=0, scroll=False)
 
     def _update_subtitle(self) -> None:
         """Update the header subtitle with session counts."""
@@ -545,10 +666,15 @@ class AgentMonitorApp(App):
         active = sum(1 for s in sessions if s.state == AgentState.ACTIVE)
         attention = sum(1 for s in sessions if s.state == AgentState.ATTENTION)
         idle = sum(1 for s in sessions if s.state == AgentState.IDLE)
-        stopped = sum(1 for run in snapshot_runs if run.status == AgentStatus.STOPPED)
+        stopped = (
+            sum(1 for run in snapshot_runs if run.status == AgentStatus.STOPPED)
+            + len(self._worktree_rows)
+        )
         running = sum(1 for run in snapshot_runs if run.status == AgentStatus.RUNNING)
 
         parts = []
+        if self._snapshot is not None:
+            parts.append(self._snapshot.host.name)
         if active:
             parts.append(f"{active} active")
         if attention:
@@ -560,7 +686,7 @@ class AgentMonitorApp(App):
         if stopped:
             parts.append(f"{stopped} stopped")
 
-        self.sub_title = ", ".join(parts) if parts else "No sessions"
+        self.sub_title = " · ".join(parts) if parts else "No sessions"
 
     def action_refresh(self) -> None:
         """Manual refresh via 'r' key."""
@@ -568,7 +694,7 @@ class AgentMonitorApp(App):
 
     def action_assign_group(self) -> None:
         """Assign a workspace group to the selected registry-backed run."""
-        run = self._selected_snapshot_run()
+        run = self._selected_snapshot_run_or_default()
         if run is None:
             self.notify("Select a registered run to assign a workspace group", severity="warning")
             return
@@ -595,6 +721,13 @@ class AgentMonitorApp(App):
         row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
         return self._snapshot_runs.get(str(row_key.value))
 
+    def _selected_snapshot_run_or_default(self) -> AgentRun | None:
+        table = self.query_one(DataTable)
+        if table.row_count == 0:
+            return None
+        row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+        return self._run_for_row_key(str(row_key.value))
+
     def action_open_selected(self) -> None:
         """Open the selected live window or registry-backed run."""
         table = self.query_one(DataTable)
@@ -614,7 +747,7 @@ class AgentMonitorApp(App):
         if selected_key.startswith("window:"):
             session = self._sessions.get(selected_key.removeprefix("window:"))
 
-        run = self._snapshot_runs.get(selected_key)
+        run = self._run_for_row_key(selected_key)
         if session is None and run is None:
             return
 
@@ -626,6 +759,15 @@ class AgentMonitorApp(App):
             self.run_worker(self._switch_and_focus(session), exclusive=False, name="switch-focus")
         elif run is not None:
             self.run_worker(self._open_run(run), exclusive=False, name="open-run")
+
+    def _run_for_row_key(self, row_key: str) -> AgentRun | None:
+        run = self._snapshot_runs.get(row_key)
+        if run is not None:
+            return run
+        worktree = self._worktree_rows.get(row_key)
+        if worktree is None:
+            return None
+        return AgentRun.default_codex_for_worktree(worktree)
 
     async def _switch_and_focus(self, session: AgentSession) -> None:
         """Switch workspace group and focus the target window."""
@@ -652,6 +794,8 @@ class AgentMonitorApp(App):
                 self.notify("workspace-group not found — opening session without workspace switch", severity="warning")
 
         if existing_window:
+            if target_group is not None:
+                move_window_to_workspace(existing_window["address"], middle_workspace_for_group(target_group))
             await focus_window(existing_window["address"])
             return
 
@@ -684,12 +828,64 @@ def main(argv: list[str] | None = None):
         print(snapshot)
         return
 
+    if argv and argv[0] == "open-run":
+        parser = argparse.ArgumentParser(prog="agent-monitor open-run")
+        parser.add_argument("target", help="agent run id or dev-tools worktree id")
+        parser.add_argument("--json", action="store_true", help="print a JSON response")
+        parser.add_argument("--devtools-registry", help="path to dev-tools instances.json")
+        parser.add_argument("--overlay", help="path to agent-monitor sessions.json")
+        parser.add_argument("--sidecar-runs-dir", help="path to agent-monitor sidecar runs directory")
+        args = parser.parse_args(argv[1:])
+        adapter = LocalHostAdapter(
+            devtools_registry_path=args.devtools_registry,
+            overlay_path=args.overlay,
+            sidecar_runs_dir=args.sidecar_runs_dir,
+        )
+        _handle_open_run_command(adapter, args.target, json_output=args.json)
+        return
+
+    if argv and argv[0] == "set-group":
+        parser = argparse.ArgumentParser(prog="agent-monitor set-group")
+        parser.add_argument("target", help="agent run id or dev-tools worktree id")
+        parser.add_argument("group", type=int, help="workspace group 1-9")
+        parser.add_argument("--json", action="store_true", help="print a JSON response")
+        parser.add_argument("--devtools-registry", help="path to dev-tools instances.json")
+        parser.add_argument("--overlay", help="path to agent-monitor sessions.json")
+        parser.add_argument("--sidecar-runs-dir", help="path to agent-monitor sidecar runs directory")
+        args = parser.parse_args(argv[1:])
+        adapter = LocalHostAdapter(
+            devtools_registry_path=args.devtools_registry,
+            overlay_path=args.overlay,
+            sidecar_runs_dir=args.sidecar_runs_dir,
+        )
+        _handle_set_group_command(adapter, args.target, args.group, json_output=args.json)
+        return
+
+    if argv and argv[0] == "codex":
+        parser = argparse.ArgumentParser(prog="agent-monitor codex")
+        parser.add_argument("--run-id", help="agent-monitor run id; defaults to <worktree-id>::<run-name>")
+        parser.add_argument("--run-name", default="main", help="run name suffix when --run-id is not provided")
+        parser.add_argument("--worktree-id", help="dev-tools worktree id; inferred from cwd when omitted")
+        parser.add_argument("--cwd", help="worktree cwd; defaults to current directory")
+        parser.add_argument("--zellij-session", help="zellij session name; defaults to $ZELLIJ_SESSION_NAME")
+        parser.add_argument("--codex-thread-id")
+        parser.add_argument("--keep-status", action="store_true", help="keep stopped sidecar status on clean exit")
+        parser.add_argument("--devtools-registry", help="path to dev-tools instances.json")
+        parser.add_argument("--sidecar-runs-dir", help="path to agent-monitor sidecar runs directory")
+        parser.add_argument("--status-path")
+        parser.add_argument("--heartbeat-interval", type=float, default=5.0)
+        parser.add_argument("codex_args", nargs=argparse.REMAINDER)
+        args = parser.parse_args(argv[1:])
+        return_code = _handle_codex_command(args, parser)
+        raise SystemExit(return_code)
+
     if argv and argv[0] == "codex-sidecar":
         parser = argparse.ArgumentParser(prog="agent-monitor codex-sidecar")
         parser.add_argument("--run-id", required=True)
         parser.add_argument("--worktree-id")
         parser.add_argument("--cwd")
         parser.add_argument("--zellij-session")
+        parser.add_argument("--codex-thread-id")
         parser.add_argument("--sidecar-runs-dir")
         parser.add_argument("--status-path")
         parser.add_argument("--heartbeat-interval", type=float, default=5.0)
@@ -706,6 +902,7 @@ def main(argv: list[str] | None = None):
             worktree_id=args.worktree_id,
             cwd=args.cwd,
             zellij_session=args.zellij_session,
+            codex_thread_id=args.codex_thread_id,
             runs_dir=args.sidecar_runs_dir,
             status_path=args.status_path,
             heartbeat_interval=args.heartbeat_interval,
@@ -715,6 +912,210 @@ def main(argv: list[str] | None = None):
 
     app = AgentMonitorApp()
     app.run()
+
+
+def _handle_open_run_command(
+    adapter: LocalHostAdapter,
+    target: str,
+    *,
+    json_output: bool,
+) -> None:
+    snapshot = adapter.snapshot()
+    run, resolved_as = _resolve_run_or_worktree(snapshot, target)
+    if run is None:
+        _finish_cli_response(
+            _error_payload("not_found", f"run or worktree not found: {target}", command="open-run", target=target),
+            json_output=json_output,
+            exit_code=1,
+        )
+        return
+
+    opened = adapter.open_run(run)
+    if not opened:
+        _finish_cli_response(
+            _error_payload("open_failed", f"failed to open run: {run.id}", command="open-run", target=target),
+            json_output=json_output,
+            exit_code=1,
+        )
+        return
+
+    refreshed_run = _resolve_exact_run(adapter.snapshot(), run.id) or run
+    _finish_cli_response(
+        {
+            "ok": True,
+            "command": "open-run",
+            "target": target,
+            "action": adapter.last_open_action,
+            "resolved_as": resolved_as,
+            "run": refreshed_run.to_dict(),
+        },
+        json_output=json_output,
+    )
+
+
+def _handle_set_group_command(
+    adapter: LocalHostAdapter,
+    target: str,
+    workspace_group: int,
+    *,
+    json_output: bool,
+) -> None:
+    snapshot = adapter.snapshot()
+    run, resolved_as = _resolve_run_or_worktree(snapshot, target)
+    if run is None:
+        _finish_cli_response(
+            _error_payload("not_found", f"run or worktree not found: {target}", command="set-group", target=target),
+            json_output=json_output,
+            exit_code=1,
+        )
+        return
+
+    try:
+        updated_run = adapter.set_workspace_group(run, workspace_group)
+    except ValueError as exc:
+        _finish_cli_response(
+            _error_payload("invalid_group", str(exc), command="set-group", target=target),
+            json_output=json_output,
+            exit_code=1,
+        )
+        return
+
+    _finish_cli_response(
+        {
+            "ok": True,
+            "command": "set-group",
+            "target": target,
+            "resolved_as": resolved_as,
+            "run": updated_run.to_dict(),
+        },
+        json_output=json_output,
+    )
+
+
+def _handle_codex_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    cwd = os.path.realpath(os.path.expanduser(args.cwd or os.getcwd()))
+    worktree_id = args.worktree_id
+    matched_devtools_worktree = False
+    if not worktree_id:
+        worktree = _find_worktree_for_cwd(cwd, read_devtools_worktrees(args.devtools_registry))
+        if worktree is not None:
+            worktree_id = worktree.id
+            matched_devtools_worktree = True
+    else:
+        matched_devtools_worktree = any(
+            worktree.id == worktree_id
+            for worktree in read_devtools_worktrees(args.devtools_registry)
+        )
+
+    run_id = args.run_id
+    if not run_id:
+        if not worktree_id:
+            parser.error("could not infer worktree id from cwd; pass --worktree-id or --run-id")
+        run_id = f"{worktree_id}::{args.run_name}"
+
+    if not worktree_id:
+        worktree_id = _worktree_id_from_run_id(run_id)
+
+    command = list(args.codex_args)
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        command = ["codex", "--cd", cwd]
+    elif command[0] != "codex":
+        command = ["codex", *command]
+
+    return run_codex_sidecar(
+        run_id=run_id,
+        worktree_id=worktree_id,
+        cwd=cwd,
+        zellij_session=args.zellij_session or os.environ.get("ZELLIJ_SESSION_NAME"),
+        codex_thread_id=args.codex_thread_id,
+        runs_dir=args.sidecar_runs_dir,
+        status_path=args.status_path,
+        heartbeat_interval=args.heartbeat_interval,
+        cleanup_stopped_status=not args.keep_status and not matched_devtools_worktree,
+        command=command,
+    )
+
+
+def _resolve_run_or_worktree(snapshot: HostSnapshot, target: str) -> tuple[AgentRun | None, str | None]:
+    run = _resolve_exact_run(snapshot, target)
+    if run is not None:
+        return run, "run"
+
+    worktree = _resolve_exact_worktree(snapshot, target)
+    if worktree is not None:
+        default_run = _resolve_exact_run(snapshot, f"{worktree.id}::main")
+        if default_run is not None:
+            return default_run, "worktree"
+        return AgentRun.default_codex_for_worktree(worktree), "worktree"
+
+    if target.endswith("::main"):
+        worktree = _resolve_exact_worktree(snapshot, target.removesuffix("::main"))
+        if worktree is not None:
+            return AgentRun.default_codex_for_worktree(worktree), "default-run"
+
+    return None, None
+
+
+def _resolve_exact_run(snapshot: HostSnapshot, run_id: str) -> AgentRun | None:
+    for run in snapshot.agent_runs:
+        if run.id == run_id:
+            return run
+    return None
+
+
+def _resolve_exact_worktree(snapshot: HostSnapshot, worktree_id: str) -> Worktree | None:
+    for worktree in snapshot.worktrees:
+        if worktree.id == worktree_id:
+            return worktree
+    return None
+
+
+def _find_worktree_for_cwd(cwd: str, worktrees: list[Worktree]) -> Worktree | None:
+    cwd_path = os.path.realpath(os.path.expanduser(cwd))
+    matches = [
+        worktree
+        for worktree in worktrees
+        if worktree.path and _path_is_inside(cwd_path, os.path.realpath(os.path.expanduser(worktree.path)))
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda worktree: len(os.path.realpath(os.path.expanduser(worktree.path))))
+
+
+def _path_is_inside(path: str, parent: str) -> bool:
+    return path == parent or path.startswith(parent.rstrip(os.sep) + os.sep)
+
+
+def _worktree_id_from_run_id(run_id: str) -> str:
+    if "::" not in run_id:
+        return run_id
+    return run_id.rsplit("::", 1)[0]
+
+
+def _finish_cli_response(payload: dict, *, json_output: bool, exit_code: int = 0) -> None:
+    if json_output:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    elif payload.get("ok"):
+        run = payload.get("run") if isinstance(payload.get("run"), dict) else {}
+        print(f"{payload['command']} ok: {run.get('id', payload.get('target', ''))}")
+    else:
+        print(payload.get("error", {}).get("message", "agent-monitor command failed"), file=sys.stderr)
+    if exit_code:
+        raise SystemExit(exit_code)
+
+
+def _error_payload(code: str, message: str, *, command: str, target: str) -> dict:
+    return {
+        "ok": False,
+        "command": command,
+        "target": target,
+        "error": {
+            "code": code,
+            "message": message,
+        },
+    }
 
 
 if __name__ == "__main__":
