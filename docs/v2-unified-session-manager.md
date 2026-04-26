@@ -481,6 +481,52 @@ Recommended next slices:
 4. **Add explicit CLI helpers**: `agent-monitor set-group`, `agent-monitor open-run`, and eventually remote-safe JSON responses.
 5. **Remote support**: add config parsing and SSH host adapter once the local command surface is stable.
 
+### Resume Here: Codex Live Status Mapping
+
+The current sidecar wrapper only tracks Codex process lifecycle:
+
+- `running` while the Codex process is alive
+- `stopped` when the Codex process exits with code `0`
+- `error` when Codex exits nonzero or fails to launch
+- `heartbeat_at_ms` for freshness, not for the `Time` column
+
+The next chat should start by finding the best local source for richer Codex state
+and translating it into sidecar updates. Candidate sources are Codex app-server
+events and `~/.codex/logs_2.sqlite`. The desired mappings are:
+
+| Codex condition | Sidecar status | Extra fields |
+|-----------------|----------------|--------------|
+| Turn/tool call running | `active` | set `active_since_ms`; update `heartbeat_at_ms` |
+| Turn complete and client open | `idle` | clear `active_since_ms`; update `updated_at_ms` |
+| Approval required | `waiting_approval` | clear `active_since_ms`; optional title/detail |
+| User input required | `waiting_input` | clear `active_since_ms`; optional title/detail |
+| Process alive but no rich state | `running` | update `heartbeat_at_ms` only |
+
+Important UI semantics:
+
+- `Time` means active turn duration only. It renders only when `status=active`
+  and `active_since_ms` is present.
+- `heartbeat_at_ms` should never render as active time; use it only for stale
+  sidecar detection or future freshness indicators.
+- Process discovery must not downgrade or re-promote an authoritative sidecar
+  state. A sidecar-backed `stopped`, `idle`, `waiting_approval`, or
+  `waiting_input` row should remain that status even if host `/proc` sees a
+  related Codex process.
+
+Suggested first implementation slice:
+
+1. Inspect recent `~/.codex/logs_2.sqlite` rows by `target`/`module_path` and
+   identify events that correspond to thread status changes, approval waits, and
+   turn start/end. Avoid depending on message text if a structured field exists.
+2. Add a small Codex telemetry reader in a new `clients/codex.py` or adjacent
+   module. Keep it optional and resilient if the SQLite DB is missing or locked.
+3. Extend `agent-monitor codex-sidecar` to poll/subscribe to that reader while
+   the child Codex process is alive, writing sidecar status updates.
+4. Add tests with fixture log/state SQLite files or narrow fakes so the mapping
+   is deterministic.
+5. Verify manually with a real Codex run: prompt active work, approval wait,
+   idle after completion, and clean quit.
+
 ### Completed Slice: Launch Codex on Session Creation
 
 Goal: `Enter` on a stopped Codex run should produce an attached terminal where
