@@ -164,11 +164,18 @@ def build_host_snapshot(
         )
         runs = _merge_sidecar_runs(worktrees, runs, read_sidecar_agent_runs(sidecar_runs_dir))
 
+    zellij_sessions: list[str] = []
     if include_zellij_sessions:
-        runs = _merge_zellij_sessions(worktrees, runs, list_zellij_sessions())
+        zellij_sessions = list_zellij_sessions()
+        runs = _merge_zellij_sessions(worktrees, runs, zellij_sessions)
 
     if include_processes:
-        runs = _merge_codex_processes(worktrees, runs, find_codex_processes())
+        runs = _merge_codex_processes(
+            worktrees,
+            runs,
+            find_codex_processes(),
+            active_zellij_sessions=set(zellij_sessions),
+        )
 
     if include_stopped_worktrees:
         worktree_ids_with_runs = {run.worktree_id for run in runs}
@@ -299,18 +306,13 @@ def _merge_codex_processes(
     worktrees: list[Worktree],
     runs: list[AgentRun],
     processes: list[dict[str, Any]],
+    *,
+    active_zellij_sessions: set[str] | None = None,
 ) -> list[AgentRun]:
     merged = list(runs)
-    matched_worktrees: set[str] = set()
-    for process in processes:
+    active_zellij_sessions = active_zellij_sessions or set()
+    for worktree, process in _best_codex_processes_by_worktree(worktrees, processes, active_zellij_sessions):
         cwd = process.get("cwd")
-        if not isinstance(cwd, str) or not cwd:
-            continue
-        worktree = _find_worktree_for_cwd(worktrees, cwd)
-        if worktree is None or worktree.id in matched_worktrees:
-            continue
-        matched_worktrees.add(worktree.id)
-
         run = _find_codex_run_for_worktree(merged, worktree)
         if run is None:
             run = AgentRun(
@@ -330,6 +332,33 @@ def _merge_codex_processes(
 
     merged.sort(key=lambda item: item.id)
     return merged
+
+
+def _best_codex_processes_by_worktree(
+    worktrees: list[Worktree],
+    processes: list[dict[str, Any]],
+    active_zellij_sessions: set[str],
+) -> list[tuple[Worktree, dict[str, Any]]]:
+    best: dict[str, tuple[Worktree, dict[str, Any], tuple[int, int]]] = {}
+    for index, process in enumerate(processes):
+        cwd = process.get("cwd")
+        if not isinstance(cwd, str) or not cwd:
+            continue
+        worktree = _find_worktree_for_cwd(worktrees, cwd)
+        if worktree is None:
+            continue
+
+        zellij_session = process.get("zellij_session_name")
+        score = 0
+        if isinstance(zellij_session, str) and zellij_session:
+            score = 2 if zellij_session in active_zellij_sessions else 1
+
+        existing = best.get(worktree.id)
+        rank = (score, -index)
+        if existing is None or rank > existing[2]:
+            best[worktree.id] = (worktree, process, rank)
+
+    return [(worktree, process) for worktree, process, _rank in best.values()]
 
 
 def _find_codex_run_for_worktree(runs: list[AgentRun], worktree: Worktree) -> AgentRun | None:

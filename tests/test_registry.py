@@ -335,6 +335,59 @@ def test_build_host_snapshot_preserves_overlay_metadata_when_codex_running(
 
 
 @patch("agent_monitor.registry._hyprland_available", return_value=False)
+@patch("agent_monitor.registry.list_zellij_sessions", return_value=["project-current"])
+@patch("agent_monitor.registry.find_codex_processes")
+@patch("agent_monitor.registry.platform.node", return_value="test-host")
+def test_build_host_snapshot_prefers_zellij_backed_codex_process_for_worktree(
+    mock_node,
+    mock_processes,
+    mock_list_zellij_sessions,
+    mock_hyprland,
+    tmp_path,
+):
+    devtools_path = tmp_path / "instances.json"
+    overlay_path = tmp_path / "sessions.json"
+    devtools_path.write_text(json.dumps({
+        "instances": {
+            "project::a": {
+                "branch": "a",
+                "worktree_path": ".worktrees/a",
+                "project_root": "/repo/project",
+            }
+        }
+    }))
+    overlay_path.write_text(json.dumps({
+        "agent_runs": {
+            "project::a::main": {
+                "worktree_id": "project::a",
+                "client": "codex",
+                "zellij_session": "project-stale",
+            }
+        }
+    }))
+    mock_processes.return_value = [
+        {
+            "pid": 123,
+            "cwd": "/repo/project/.worktrees/a",
+            "zellij_session_name": None,
+        },
+        {
+            "pid": 456,
+            "cwd": "/repo/project/.worktrees/a",
+            "zellij_session_name": "project-current",
+        },
+    ]
+
+    snapshot = build_host_snapshot(
+        devtools_registry_path=devtools_path,
+        overlay_path=overlay_path,
+        sidecar_runs_dir=tmp_path / "missing-runs",
+    )
+
+    assert snapshot.agent_runs[0].zellij_session == "project-current"
+
+
+@patch("agent_monitor.registry._hyprland_available", return_value=False)
 @patch("agent_monitor.registry.find_codex_processes")
 @patch("agent_monitor.registry.platform.node", return_value="test-host")
 def test_build_host_snapshot_sidecar_status_is_primary_for_codex_run(
