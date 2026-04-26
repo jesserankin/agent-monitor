@@ -523,6 +523,69 @@ async def test_open_run_uses_existing_window_workspace_when_run_has_no_group():
 
 
 @pytest.mark.asyncio
+async def test_open_run_focuses_live_session_with_matching_cwd_when_saved_zellij_is_stale():
+    snapshot, run = _make_snapshot_run(workspace_group=7, zellij_session="ge-grid")
+    run.cwd = "/home/jesse/projects/game-engine-v2-play_testing"
+    app = _make_app(snapshot)
+    live_session = _make_session(
+        address="abc123",
+        session_name="ge-comp",
+        task_description="game-engine-v2-play_testing",
+        state=AgentState.IDLE,
+        workspace_id=17,
+        cwd="game-engine-v2-play_testing",
+    )
+    app._sessions[live_session.address] = live_session
+
+    with patch("agent_monitor.app.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
+         patch.object(app, "_start_monitor"), \
+         patch("agent_monitor.app.find_zellij_window", return_value=None), \
+         patch("agent_monitor.app.switch_to_group") as mock_switch, \
+         patch("agent_monitor.app.move_window_to_workspace") as mock_move, \
+         patch("agent_monitor.app.focus_window") as mock_focus:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._open_run(run)
+
+            mock_switch.assert_called_once_with(7)
+            mock_move.assert_called_once_with("abc123", 17)
+            mock_focus.assert_called_once_with("abc123")
+            assert app._host_adapter.opened == []
+
+
+@pytest.mark.asyncio
+async def test_open_run_focuses_live_session_with_truncated_cwd_in_title():
+    snapshot, run = _make_snapshot_run(workspace_group=7, zellij_session="ge-grid")
+    run.cwd = "/home/jesse/projects/game-engine-v2-play_testing"
+    app = _make_app(snapshot)
+    live_session = _make_session(
+        address="abc123",
+        session_name="ge-comp",
+        task_description="... game-engine-v2-play_t...",
+        state=AgentState.IDLE,
+        workspace_id=17,
+    )
+    app._sessions[live_session.address] = live_session
+
+    with patch("agent_monitor.app.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
+         patch.object(app, "_start_monitor"), \
+         patch("agent_monitor.app.find_zellij_window", return_value=None), \
+         patch("agent_monitor.app.switch_to_group"), \
+         patch("agent_monitor.app.move_window_to_workspace"), \
+         patch("agent_monitor.app.focus_window") as mock_focus:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._open_run(run)
+
+            mock_focus.assert_called_once_with("abc123")
+            assert app._host_adapter.opened == []
+
+
+@pytest.mark.asyncio
 async def test_data_table_row_selected_opens_run():
     snapshot, _ = _make_snapshot_run(workspace_group=4, zellij_session="ge-combat-ui")
     app = _make_app(snapshot)

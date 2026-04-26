@@ -258,6 +258,35 @@ def _session_sort_key(session: AgentSession) -> tuple:
     return (0, session.workspace_group, status_rank, session.session_name, session.address)
 
 
+def _path_basename(value: str | None) -> str:
+    if not value:
+        return ""
+    return os.path.basename(os.path.realpath(os.path.expanduser(value)))
+
+
+def _compact_match_text(value: str) -> str:
+    return "".join(char.lower() for char in value if char.isalnum())
+
+
+def _text_matches_path_fragment(text: str, path_basename: str) -> bool:
+    """Return true when terminal text appears to refer to a cwd basename."""
+    if not text or not path_basename:
+        return False
+    compact_text = _compact_match_text(text)
+    compact_base = _compact_match_text(path_basename)
+    if len(compact_base) < 8 or not compact_text:
+        return False
+    if compact_base in compact_text:
+        return True
+
+    # Terminal titles are often truncated, so allow substantial prefixes.
+    for size in (20, 16, 12):
+        prefix = compact_base[:size]
+        if len(prefix) >= 12 and prefix in compact_text:
+            return True
+    return False
+
+
 class AgentMonitorApp(App):
     TITLE = "Agent Monitor"
     CSS_PATH = "monitor.tcss"
@@ -780,11 +809,14 @@ class AgentMonitorApp(App):
         existing_window = None
         if run.zellij_session:
             existing_window = await find_zellij_window(run.zellij_session)
+        live_session = None if existing_window else self._live_session_for_run(run)
         target_group = run.workspace_group
         if target_group is None and existing_window:
             workspace_id = existing_window.get("workspace_id")
             if isinstance(workspace_id, int) and workspace_id > 0 and workspace_id % 10 != 0:
                 target_group = workspace_id % 10
+        if target_group is None and live_session is not None:
+            target_group = live_session.workspace_group
 
         if target_group is not None:
             if self._workspace_group_available:
@@ -799,8 +831,49 @@ class AgentMonitorApp(App):
             await focus_window(existing_window["address"])
             return
 
+        if live_session is not None:
+            if target_group is not None:
+                move_window_to_workspace(live_session.address, middle_workspace_for_group(target_group))
+            await focus_window(live_session.address)
+            return
+
         if not self._host_adapter.open_run(run):
             self.notify("No supported terminal found for zellij attach", severity="warning")
+
+    def _live_session_for_run(self, run: AgentRun) -> AgentSession | None:
+        """Find a visible terminal row that appears to own a run despite stale zellij metadata."""
+        cwd_basename = _path_basename(run.cwd)
+        if not cwd_basename:
+            return None
+
+        matches: list[tuple[int, AgentSession]] = []
+        for session in self._sessions.values():
+            if run.workspace_group is not None and session.workspace_group != run.workspace_group:
+                continue
+
+            score = 0
+            session_cwd = _path_basename(session.cwd)
+            if session_cwd and session_cwd == cwd_basename:
+                score += 100
+            elif session_cwd and _text_matches_path_fragment(session_cwd, cwd_basename):
+                score += 80
+
+            title_text = f"{session.session_name} {session.task_description}"
+            if _text_matches_path_fragment(title_text, cwd_basename):
+                score += 60
+
+            if run.zellij_session and session.session_name == run.zellij_session:
+                score += 20
+
+            if score:
+                matches.append((score, session))
+
+        if not matches:
+            return None
+        matches.sort(key=lambda item: item[0], reverse=True)
+        if len(matches) > 1 and matches[0][0] == matches[1][0]:
+            return None
+        return matches[0][1]
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         """Log worker failures for debugging."""
