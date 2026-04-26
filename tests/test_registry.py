@@ -388,6 +388,60 @@ def test_build_host_snapshot_prefers_zellij_backed_codex_process_for_worktree(
 
 
 @patch("agent_monitor.registry._hyprland_available", return_value=False)
+@patch("agent_monitor.registry.list_zellij_sessions", return_value=["project-current"])
+@patch("agent_monitor.registry.find_codex_processes", return_value=[])
+@patch("agent_monitor.registry.platform.node", return_value="test-host")
+def test_build_host_snapshot_drops_stale_live_zellij_session_from_sidecar_and_overlay(
+    mock_node,
+    mock_processes,
+    mock_list_zellij_sessions,
+    mock_hyprland,
+    tmp_path,
+):
+    devtools_path = tmp_path / "instances.json"
+    overlay_path = tmp_path / "sessions.json"
+    sidecar_dir = tmp_path / "runs"
+    sidecar_path = sidecar_dir / "project--a--main" / "status.json"
+    devtools_path.write_text(json.dumps({
+        "instances": {
+            "project::a": {
+                "branch": "a",
+                "worktree_path": ".worktrees/a",
+                "project_root": "/repo/project",
+            }
+        }
+    }))
+    overlay_path.write_text(json.dumps({
+        "agent_runs": {
+            "project::a::main": {
+                "worktree_id": "project::a",
+                "client": "codex",
+                "zellij_session": "project-stale",
+            }
+        }
+    }))
+    sidecar_path.parent.mkdir(parents=True)
+    sidecar_path.write_text(json.dumps({
+        "run_id": "project::a::main",
+        "worktree_id": "project::a",
+        "client": "codex",
+        "status": "idle",
+        "cwd": "/repo/project/.worktrees/a",
+        "zellij_session": "project-stale",
+        "heartbeat_at_ms": 1777160883999,
+    }))
+
+    snapshot = build_host_snapshot(
+        devtools_registry_path=devtools_path,
+        overlay_path=overlay_path,
+        sidecar_runs_dir=sidecar_dir,
+    )
+
+    assert snapshot.agent_runs[0].status == AgentStatus.IDLE
+    assert snapshot.agent_runs[0].zellij_session is None
+
+
+@patch("agent_monitor.registry._hyprland_available", return_value=False)
 @patch("agent_monitor.registry.find_codex_processes")
 @patch("agent_monitor.registry.platform.node", return_value="test-host")
 def test_build_host_snapshot_sidecar_status_is_primary_for_codex_run(

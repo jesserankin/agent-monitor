@@ -154,6 +154,9 @@ def build_host_snapshot(
     """Build a local normalized snapshot from the registries currently available."""
     worktrees = read_devtools_worktrees(devtools_registry_path)
     runs = read_overlay_agent_runs(overlay_path)
+    zellij_sessions: list[str] = []
+    if include_zellij_sessions:
+        zellij_sessions = list_zellij_sessions()
 
     if include_sidecars:
         prune_ephemeral_sidecar_statuses(
@@ -162,12 +165,16 @@ def build_host_snapshot(
             overlay_run_ids={run.id for run in runs},
             now_ms=int(time.time() * 1000),
         )
-        runs = _merge_sidecar_runs(worktrees, runs, read_sidecar_agent_runs(sidecar_runs_dir))
+        runs = _merge_sidecar_runs(
+            worktrees,
+            runs,
+            read_sidecar_agent_runs(sidecar_runs_dir),
+            active_zellij_sessions=set(zellij_sessions),
+        )
 
-    zellij_sessions: list[str] = []
     if include_zellij_sessions:
-        zellij_sessions = list_zellij_sessions()
         runs = _merge_zellij_sessions(worktrees, runs, zellij_sessions)
+        runs = _clear_invalid_live_zellij_sessions(runs, set(zellij_sessions))
 
     if include_processes:
         runs = _merge_codex_processes(
@@ -201,18 +208,26 @@ def _merge_sidecar_runs(
     worktrees: list[Worktree],
     runs: list[AgentRun],
     sidecar_runs: list[AgentRun],
+    *,
+    active_zellij_sessions: set[str] | None = None,
 ) -> list[AgentRun]:
+    active_zellij_sessions = active_zellij_sessions or set()
     merged = list(runs)
     for sidecar_run in sidecar_runs:
+        sidecar_zellij_session = _live_zellij_session_or_none(
+            sidecar_run.zellij_session,
+            active_zellij_sessions,
+        )
         run = _find_run_for_sidecar(merged, worktrees, sidecar_run)
         if run is None:
+            sidecar_run.zellij_session = sidecar_zellij_session
             merged.append(sidecar_run)
             continue
 
         run.client = sidecar_run.client
         run.status = sidecar_run.status
         run.workspace_group = sidecar_run.workspace_group if sidecar_run.workspace_group is not None else run.workspace_group
-        run.zellij_session = sidecar_run.zellij_session or run.zellij_session
+        run.zellij_session = sidecar_zellij_session or run.zellij_session
         run.agent_pane = sidecar_run.agent_pane or run.agent_pane
         run.cwd = sidecar_run.cwd or run.cwd
         run.client_ids = {**run.client_ids, **sidecar_run.client_ids}
@@ -221,6 +236,31 @@ def _merge_sidecar_runs(
 
     merged.sort(key=lambda item: item.id)
     return merged
+
+
+def _clear_invalid_live_zellij_sessions(
+    runs: list[AgentRun],
+    active_zellij_sessions: set[str],
+) -> list[AgentRun]:
+    if not active_zellij_sessions:
+        return runs
+    for run in runs:
+        if run.status == AgentStatus.STOPPED:
+            continue
+        if run.zellij_session and run.zellij_session not in active_zellij_sessions:
+            run.zellij_session = None
+    return runs
+
+
+def _live_zellij_session_or_none(
+    zellij_session: str | None,
+    active_zellij_sessions: set[str],
+) -> str | None:
+    if not zellij_session:
+        return None
+    if active_zellij_sessions and zellij_session not in active_zellij_sessions:
+        return None
+    return zellij_session
 
 
 def _merge_zellij_sessions(
