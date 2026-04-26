@@ -12,7 +12,17 @@ from agent_monitor.app import (
     StatuslineDataChanged,
     _render_duration,
 )
-from agent_monitor.models import AgentRun, AgentSession, AgentState, ClientName, HostInfo, HostSnapshot, Worktree
+from agent_monitor.models import (
+    AgentRun,
+    AgentSession,
+    AgentState,
+    AgentStatus,
+    ClientName,
+    ClientTelemetry,
+    HostInfo,
+    HostSnapshot,
+    Worktree,
+)
 
 
 class StaticHostAdapter:
@@ -135,6 +145,71 @@ async def test_snapshot_worktree_run_shows_on_mount():
             assert row[3] == "game-engine-v2"
             assert row[4] == "combat-ui"
             assert row[5].plain == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_run_with_telemetry_shows_context_and_time_columns():
+    """Registry-backed runs should render sidecar telemetry columns."""
+    snapshot, run = _make_snapshot_run()
+    run.status = AgentStatus.ACTIVE
+    run.telemetry = ClientTelemetry(
+        title="Sidecar task",
+        context_used_pct=67.0,
+        active_since_ms=1_000_000,
+    )
+    app = _make_app(snapshot)
+    with patch("agent_monitor.app.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
+         patch("agent_monitor.app.time.time", return_value=1_125), \
+         patch.object(app, "_start_monitor"):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            table = app.query_one("#sessions")
+            assert len(table.columns) == 9
+            row = table.get_row_at(0)
+            assert row[6].plain == "Sidecar task"
+            assert row[7].plain == "███████░░░ 67%"
+            assert row[8].plain == "2m"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_running_run_does_not_show_heartbeat_age_as_time():
+    snapshot, run = _make_snapshot_run()
+    run.status = AgentStatus.RUNNING
+    run.telemetry = ClientTelemetry(heartbeat_at_ms=1_000_000)
+    app = _make_app(snapshot)
+    with patch("agent_monitor.app.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
+         patch("agent_monitor.app.time.time", return_value=1_030), \
+         patch.object(app, "_start_monitor"):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            table = app.query_one("#sessions")
+            assert len(table.columns) == 7
+
+
+@pytest.mark.asyncio
+async def test_snapshot_terminal_status_does_not_show_running_time():
+    snapshot, run = _make_snapshot_run()
+    run.status = AgentStatus.ERROR
+    run.telemetry = ClientTelemetry(
+        context_used_pct=67.0,
+        active_since_ms=1_000_000,
+        heartbeat_at_ms=1_030_000,
+    )
+    app = _make_app(snapshot)
+    with patch("agent_monitor.app.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.app.get_event_socket_path", return_value="/fake/socket"), \
+         patch("agent_monitor.app.time.time", return_value=1_125), \
+         patch.object(app, "_start_monitor"):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            table = app.query_one("#sessions")
+            row = table.get_row_at(0)
+            assert row[8].plain == ""
 
 
 @pytest.mark.asyncio

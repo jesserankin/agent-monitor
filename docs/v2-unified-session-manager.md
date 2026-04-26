@@ -83,11 +83,11 @@ Agent clients are provider-specific sources of status and telemetry. They normal
 
 | Client | Baseline signals | Rich signals |
 |--------|------------------|--------------|
-| **Codex CLI** | process name, cwd, zellij session, `~/.codex/state_5.sqlite` thread metadata | app-server events such as thread status, active flags, turns, token usage |
+| **Codex CLI** | sidecar status JSON, process name, cwd, zellij session, `~/.codex/state_5.sqlite` thread metadata | app-server events written through the sidecar such as thread status, active flags, turns, token usage |
 | **Claude Code** | Hyprland title, process name, cwd, zellij session | statusline sidecar JSON |
 | **unknown/custom** | process name, cwd, zellij session | optional monitor JSON written by a wrapper |
 
-Adapters should be optional and independently degradable. If Codex app-server support is unavailable, the Codex adapter still reports running/stopped, cwd, thread title, model, tokens, and last update from process discovery plus SQLite metadata.
+Adapters should be optional and independently degradable. Codex status should prefer the agent-monitor sidecar for both host and devcontainer runs. If the sidecar is unavailable, the Codex adapter can still report running/stopped from process discovery and static thread metadata from SQLite.
 
 ### Two UI Modes
 
@@ -239,11 +239,11 @@ The zsh inside the container loads direnv, which sets `PHX_PORT` and other env v
 Agent-monitor should correlate a visible zellij/terminal session to a client-specific identity in this order:
 
 1. Overlay run id and configured zellij session
-2. Process tree: terminal PID -> zellij client/server -> agent process
-3. Client telemetry keyed by cwd, thread id, or session id
+2. Agent-monitor sidecar status keyed by run id, cwd, thread id, or session id
+3. Process tree: terminal PID -> zellij client/server -> agent process
 4. Window title as a presentation hint, not the primary identity
 
-For Codex, the baseline identity source is `~/.codex/state_5.sqlite`, especially thread id, cwd, title, source, model, token count, and updated timestamps. For rich live state, prefer Codex app-server events when available. For Claude, the current statusline sidecar remains the rich telemetry source.
+For Codex, the primary live identity and status source is `$XDG_RUNTIME_DIR/agent-monitor/runs/<run-id>/status.json`. For static thread metadata, `~/.codex/state_5.sqlite` can still supply thread id, cwd, title, source, model, token count, and updated timestamps. For rich live state, prefer Codex app-server events when available, but publish those events through the sidecar so host, devcontainer, and remote runs all share the same ingestion path. For Claude, the current statusline sidecar remains the rich telemetry source until it is migrated to the generic agent-monitor sidecar.
 
 ### Codex Status Mapping
 
@@ -251,12 +251,13 @@ Codex support should degrade cleanly by source:
 
 | Source | Available status |
 |--------|------------------|
+| Agent-monitor sidecar | `active`, `idle`, `waiting_input`, `waiting_approval`, `error`, plus title/model/tokens/heartbeat |
 | Process + zellij only | `running` or `stopped` |
 | SQLite thread metadata | title, cwd, model, token count, last update, but not live blocked/active state |
-| App-server `ThreadStatusChanged` | `active`, `idle`, `error`, with `waiting_input` and `waiting_approval` from active flags |
-| App-server turn/token events | active turn timing and token/context counters |
+| App-server `ThreadStatusChanged` | Should be translated into sidecar status: `active`, `idle`, `error`, with `waiting_input` and `waiting_approval` from active flags |
+| App-server turn/token events | Should be translated into sidecar fields for active turn timing and token/context counters |
 
-The app-server protocol is experimental, so the Codex adapter should treat it as an optional rich backend. The baseline SQLite/process path should be good enough for the TUI to show which worktrees have Codex sessions and when they last moved.
+The app-server protocol is experimental, so the Codex adapter should treat it as an optional rich backend behind the sidecar. The sidecar schema is the stable contract consumed by the TUI. The baseline process path remains useful only as a fallback to show which worktrees have Codex sessions.
 
 ## Devcontainer Integration
 
@@ -274,16 +275,42 @@ devcontainer up --workspace-folder "$PROJECT_PATH"
 
 ### Monitor Telemetry Visibility
 
-Client adapters may need host-visible telemetry files. Claude's statusline sidecar currently writes to `$XDG_RUNTIME_DIR/claude-monitor/`. A client-agnostic wrapper or future custom client should write to `$XDG_RUNTIME_DIR/agent-monitor/<client>/`.
+Client adapters need host-visible telemetry files. Codex should write a generic agent-monitor sidecar as the primary status channel for all runs:
+
+```text
+$XDG_RUNTIME_DIR/agent-monitor/runs/<run-id>/status.json
+```
+
+The status file is atomically replaced and has this shape:
+
+```json
+{
+  "version": 1,
+  "run_id": "project::branch::main",
+  "worktree_id": "project::branch",
+  "client": "codex",
+  "status": "waiting_approval",
+  "cwd": "/repo/project/.worktrees/branch",
+  "zellij_session": "project-branch",
+  "thread_id": "thread-123",
+  "title": "Implement telemetry",
+  "model": "gpt-5.5",
+  "tokens_used": 12345,
+  "updated_at_ms": 1777160883214,
+  "heartbeat_at_ms": 1777160883999
+}
+```
+
+Claude's statusline sidecar currently writes to `$XDG_RUNTIME_DIR/claude-monitor/`. Keep that compatibility path until Claude is migrated to the generic agent-monitor sidecar.
 
 Mount the host's monitor dir into the container so the host agent-monitor can watch it.
 
 Add to `devcontainer.json` mounts:
 ```json
-"source=${localEnv:XDG_RUNTIME_DIR}/agent-monitor,target=/run/user/1000/agent-monitor,type=bind,consistency=cached"
+"source=${localEnv:XDG_RUNTIME_DIR}/agent-monitor,target=/run/agent-monitor,type=bind,consistency=cached"
 ```
 
-Keep the existing Claude mount as a compatibility fallback until the Claude sidecar is migrated.
+Inside the devcontainer, launch Codex through a wrapper with `AGENT_MONITOR_RUN_ID` and `AGENT_MONITOR_STATUS_PATH=/run/agent-monitor/runs/<run-id>/status.json`. The wrapper or Codex adapter writes sidecar updates while Codex runs. This makes host and container status ingestion identical.
 
 ### Process Tree Resolution
 
@@ -420,20 +447,24 @@ Implemented and manually verified:
 
 - Normalized models exist in `models.py`: `HostSnapshot`, `Worktree`, `AgentRun`, `AgentStatus`, `ClientTelemetry`.
 - `registry.py` reads `~/.config/dev_tools/instances.json`, reads/writes `~/.config/agent-monitor/sessions.json`, and merges stopped worktrees with overlay runs.
+- `sidecar.py` reads generic agent-monitor sidecar status files from `$XDG_RUNTIME_DIR/agent-monitor/runs/*/status.json`.
+- `agent-monitor codex-sidecar --run-id ... -- <command>` runs Codex behind a wrapper that writes `running` heartbeats and final `stopped`/`error` status.
 - `agent-monitor host-snapshot --json` returns a normalized local host snapshot.
 - `hosts.py` has a local host adapter with `snapshot`, `set_workspace_group`, and `open_run`. No SSH adapter exists yet.
 - The TUI now renders the v2 table columns: `Host`, `WS`, `Client`, `Project`, `Branch`, `Status`, `Task`.
+- The TUI adds `Context` and `Time` columns when a v2 run or Claude statusline row has telemetry. Codex sidecar `context_used_pct` renders in `Context`; `Time` only renders active turn duration when `status=active` and `active_since_ms` is present.
 - The TUI still keeps legacy Claude/Hyprland live window rows alongside v2 registry-backed rows.
 - Running Codex processes are discovered through `/proc`, matched by CWD to dev-tools worktrees, and shown as `client=codex`, `status=running`.
+- Codex sidecar status is merged before process discovery and is treated as primary; process discovery no longer downgrades sidecar states such as `waiting_approval` to `running`.
 - Detected Codex runs also capture their ancestor zellij session when available.
 - `a` assigns a workspace group for a run and persists it in the agent-monitor overlay.
 - `Enter` on a running zellij-backed row first tries to focus an existing Hyprland terminal attached to that zellij session.
 - If no existing terminal is found, `Enter` opens a terminal attached to the saved zellij session.
 - Fallback terminal creation launches on the middle workspace for the assigned group (`WS 1 -> workspace 11`, `WS 2 -> workspace 12`, etc.) instead of inheriting agent-monitor's floating/shared workspace.
 - `Enter` on a row without a saved zellij session creates a stable zellij session name from the run id, persists it to the overlay, and opens it with `zellij attach --create ... options --default-cwd <worktree-cwd>`.
-- New zellij session creation can now launch an initial client command. It uses the run's persisted `launch.argv` when present, and defaults to `codex --cd <cwd>` for Codex runs.
+- New zellij session creation can now launch an initial client command. It uses the run's persisted `launch.argv` when present, and defaults to `codex --cd <cwd>` for Codex runs. Codex commands are wrapped through `agent-monitor codex-sidecar`.
 - Rows with `client=unknown` and no launch command still open as plain zellij rooted in the worktree.
-- Full test suite currently passes: `scripts/test` reports `194 passed`.
+- Full test suite currently passes: `scripts/test` reports `211 passed`.
 
 Known manual behavior:
 
@@ -444,10 +475,11 @@ Known manual behavior:
 
 Recommended next slices:
 
-1. **Make row identity less synthetic**: distinguish worktree-level default rows from concrete agent-run rows so multiple Codex runs in one worktree can be represented cleanly.
-2. **Add Codex SQLite telemetry**: read `~/.codex/state_5.sqlite` for thread title/model/token/updated metadata and attach it to matched runs.
-3. **Add explicit CLI helpers**: `agent-monitor set-group`, `agent-monitor open-run`, and eventually remote-safe JSON responses.
-4. **Remote support**: add config parsing and SSH host adapter once the local command surface is stable.
+1. **Map Codex live events into the sidecar**: subscribe to app-server or log events and update sidecar status to `active`, `idle`, `waiting_input`, or `waiting_approval`.
+2. **Make row identity less synthetic**: distinguish worktree-level default rows from concrete agent-run rows so multiple Codex runs in one worktree can be represented cleanly.
+3. **Add Codex SQLite telemetry**: read `~/.codex/state_5.sqlite` for thread title/model/token/updated metadata and attach it to matched runs when the sidecar lacks those fields.
+4. **Add explicit CLI helpers**: `agent-monitor set-group`, `agent-monitor open-run`, and eventually remote-safe JSON responses.
+5. **Remote support**: add config parsing and SSH host adapter once the local command surface is stable.
 
 ### Completed Slice: Launch Codex on Session Creation
 
@@ -506,9 +538,11 @@ Implemented points:
 
 ### Phase 3: Client Adapters
 - Move current Claude title/statusline parsing behind a Claude adapter
+- [x] Add generic agent-monitor sidecar reader for client live status
+- [x] Add Codex wrapper that writes sidecar heartbeat and exit status
 - [x] Add baseline Codex process/zellij/CWD discovery
 - [ ] Add Codex adapter with baseline SQLite metadata from `~/.codex/state_5.sqlite`
-- Add optional Codex app-server event support for rich live status (`active`, `idle`, `waiting_input`, `waiting_approval`, token usage)
+- Add optional Codex app-server event support that writes sidecar updates for rich live status (`active`, `idle`, `waiting_input`, `waiting_approval`, token usage)
 - Keep unknown/custom clients discoverable by process name, cwd, zellij session, and optional generic monitor JSON
 
 ### Phase 4: SSH Remote Support
@@ -553,7 +587,8 @@ Implemented points:
 | File | Status | Responsibility |
 |------|--------|---------------|
 | `models.py` | Implemented | Normalized host/worktree/agent-run/client telemetry models |
-| `registry.py` | Implemented | Read dev-tools registry, manage agent-monitor overlay, merge stopped worktrees and baseline Codex processes |
+| `registry.py` | Implemented | Read dev-tools registry, manage agent-monitor overlay, merge stopped worktrees, sidecar status, and baseline Codex processes |
+| `sidecar.py` | Implemented | Read generic agent-monitor sidecar status files for Codex/devcontainer/custom runs |
 | `hosts.py` | Local only | Host abstraction and local snapshot/open/group commands |
 | `zellij.py` | Partial | Session names, terminal attach commands, middle workspace placement |
 | `clients/base.py` | Planned | Client adapter protocol and shared status mapping |

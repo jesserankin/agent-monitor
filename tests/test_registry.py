@@ -192,6 +192,7 @@ def test_build_host_snapshot_adds_stopped_runs_for_worktrees(
     snapshot = build_host_snapshot(
         devtools_registry_path=devtools_path,
         overlay_path=overlay_path,
+        sidecar_runs_dir=tmp_path / "missing-runs",
     )
 
     assert snapshot.host.name == "test-host"
@@ -240,6 +241,7 @@ def test_build_host_snapshot_marks_matching_codex_worktree_running(
     snapshot = build_host_snapshot(
         devtools_registry_path=devtools_path,
         overlay_path=overlay_path,
+        sidecar_runs_dir=tmp_path / "missing-runs",
     )
 
     runs = {run.worktree_id: run for run in snapshot.agent_runs}
@@ -289,6 +291,7 @@ def test_build_host_snapshot_preserves_overlay_metadata_when_codex_running(
     snapshot = build_host_snapshot(
         devtools_registry_path=devtools_path,
         overlay_path=overlay_path,
+        sidecar_runs_dir=tmp_path / "missing-runs",
     )
 
     assert len(snapshot.agent_runs) == 1
@@ -297,6 +300,157 @@ def test_build_host_snapshot_preserves_overlay_metadata_when_codex_running(
     assert run.workspace_group == 4
     assert run.status == AgentStatus.RUNNING
     assert run.cwd == "/repo/project/.worktrees/a/src"
+
+
+@patch("agent_monitor.registry._hyprland_available", return_value=False)
+@patch("agent_monitor.registry.find_codex_processes")
+@patch("agent_monitor.registry.platform.node", return_value="test-host")
+def test_build_host_snapshot_sidecar_status_is_primary_for_codex_run(
+    mock_node,
+    mock_processes,
+    mock_hyprland,
+    tmp_path,
+):
+    devtools_path = tmp_path / "instances.json"
+    overlay_path = tmp_path / "sessions.json"
+    sidecar_dir = tmp_path / "runs"
+    sidecar_path = sidecar_dir / "project--a--main" / "status.json"
+    devtools_path.write_text(json.dumps({
+        "instances": {
+            "project::a": {
+                "branch": "a",
+                "worktree_path": ".worktrees/a",
+                "project_root": "/repo/project",
+            }
+        }
+    }))
+    overlay_path.write_text(json.dumps({
+        "agent_runs": {
+            "project::a::main": {
+                "worktree_id": "project::a",
+                "client": "codex",
+                "workspace_group": 5,
+                "model": "gpt-5.5",
+                "tokens_used": 9000,
+            }
+        }
+    }))
+    sidecar_path.parent.mkdir(parents=True)
+    sidecar_path.write_text(json.dumps({
+        "run_id": "project::a::main",
+        "worktree_id": "project::a",
+        "client": "codex",
+        "status": "waiting_approval",
+        "cwd": "/repo/project/.worktrees/a",
+        "zellij_session": "project-a",
+        "title": "Waiting for approval",
+        "heartbeat_at_ms": 1777160883999,
+    }))
+    mock_processes.return_value = [
+        {
+            "pid": 123,
+            "cwd": "/repo/project/.worktrees/a",
+            "zellij_session_name": "project-a",
+        }
+    ]
+
+    snapshot = build_host_snapshot(
+        devtools_registry_path=devtools_path,
+        overlay_path=overlay_path,
+        sidecar_runs_dir=sidecar_dir,
+    )
+
+    assert len(snapshot.agent_runs) == 1
+    run = snapshot.agent_runs[0]
+    assert run.status == AgentStatus.WAITING_APPROVAL
+    assert run.workspace_group == 5
+    assert run.zellij_session == "project-a"
+    assert run.telemetry.title == "Waiting for approval"
+    assert run.telemetry.model == "gpt-5.5"
+    assert run.telemetry.tokens_used == 9000
+    assert run.telemetry.heartbeat_at_ms == 1777160883999
+
+
+@patch("agent_monitor.registry._hyprland_available", return_value=False)
+@patch("agent_monitor.registry.find_codex_processes")
+@patch("agent_monitor.registry.platform.node", return_value="test-host")
+def test_build_host_snapshot_stopped_sidecar_is_not_repromoted_by_process_discovery(
+    mock_node,
+    mock_processes,
+    mock_hyprland,
+    tmp_path,
+):
+    devtools_path = tmp_path / "instances.json"
+    overlay_path = tmp_path / "sessions.json"
+    sidecar_dir = tmp_path / "runs"
+    sidecar_path = sidecar_dir / "project--a--main" / "status.json"
+    devtools_path.write_text(json.dumps({
+        "instances": {
+            "project::a": {
+                "branch": "a",
+                "worktree_path": ".worktrees/a",
+                "project_root": "/repo/project",
+            }
+        }
+    }))
+    overlay_path.write_text(json.dumps({"agent_runs": {}}))
+    sidecar_path.parent.mkdir(parents=True)
+    sidecar_path.write_text(json.dumps({
+        "run_id": "project::a::main",
+        "worktree_id": "project::a",
+        "client": "codex",
+        "status": "stopped",
+        "cwd": "/repo/project/.worktrees/a",
+        "heartbeat_at_ms": 1777160883999,
+    }))
+    mock_processes.return_value = [
+        {
+            "pid": 123,
+            "cwd": "/repo/project/.worktrees/a",
+            "zellij_session_name": "project-a",
+        }
+    ]
+
+    snapshot = build_host_snapshot(
+        devtools_registry_path=devtools_path,
+        overlay_path=overlay_path,
+        sidecar_runs_dir=sidecar_dir,
+    )
+
+    assert len(snapshot.agent_runs) == 1
+    assert snapshot.agent_runs[0].status == AgentStatus.STOPPED
+    assert snapshot.agent_runs[0].zellij_session == "project-a"
+
+
+@patch("agent_monitor.registry._hyprland_available", return_value=False)
+@patch("agent_monitor.registry.find_codex_processes", return_value=[])
+@patch("agent_monitor.registry.platform.node", return_value="test-host")
+def test_build_host_snapshot_adds_sidecar_only_run(
+    mock_node,
+    mock_processes,
+    mock_hyprland,
+    tmp_path,
+):
+    sidecar_dir = tmp_path / "runs"
+    status_path = sidecar_dir / "project--a--review" / "status.json"
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(json.dumps({
+        "run_id": "project::a::review",
+        "worktree_id": "project::a",
+        "client": "codex",
+        "status": "idle",
+        "cwd": "/repo/project/.worktrees/a",
+    }))
+
+    snapshot = build_host_snapshot(
+        devtools_registry_path=tmp_path / "missing-instances.json",
+        overlay_path=tmp_path / "missing-sessions.json",
+        sidecar_runs_dir=sidecar_dir,
+    )
+
+    assert len(snapshot.agent_runs) == 1
+    assert snapshot.agent_runs[0].id == "project::a::review"
+    assert snapshot.agent_runs[0].status == AgentStatus.IDLE
 
 
 def test_missing_registry_files_are_empty(tmp_path):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Protocol
@@ -33,16 +34,19 @@ class LocalHostAdapter:
         host_name: str | None = None,
         devtools_registry_path: str | Path | None = None,
         overlay_path: str | Path | None = None,
+        sidecar_runs_dir: str | Path | None = None,
     ) -> None:
         self.host_name = host_name
         self.devtools_registry_path = devtools_registry_path
         self.overlay_path = overlay_path
+        self.sidecar_runs_dir = sidecar_runs_dir
 
     def snapshot(self) -> HostSnapshot:
         return build_host_snapshot(
             host_name=self.host_name,
             devtools_registry_path=self.devtools_registry_path,
             overlay_path=self.overlay_path,
+            sidecar_runs_dir=self.sidecar_runs_dir,
         )
 
     def set_workspace_group(self, run: AgentRun, workspace_group: int) -> AgentRun:
@@ -76,7 +80,29 @@ class LocalHostAdapter:
 def _launch_argv_for_run(run: AgentRun) -> Sequence[str] | None:
     argv = run.launch.get("argv")
     if isinstance(argv, list) and all(isinstance(part, str) and part for part in argv):
+        if run.client == ClientName.CODEX:
+            return _codex_sidecar_argv(run, argv)
         return argv
     if run.client == ClientName.CODEX and run.cwd:
-        return ["codex", "--cd", run.cwd]
+        return _codex_sidecar_argv(run, ["codex", "--cd", run.cwd])
     return None
+
+
+def _codex_sidecar_argv(run: AgentRun, codex_argv: Sequence[str]) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "agent_monitor",
+        "codex-sidecar",
+        "--run-id",
+        run.id,
+        "--worktree-id",
+        run.worktree_id,
+    ]
+    if run.cwd:
+        command.extend(["--cwd", run.cwd])
+    if run.zellij_session:
+        command.extend(["--zellij-session", run.zellij_session])
+    command.append("--")
+    command.extend(codex_argv)
+    return command

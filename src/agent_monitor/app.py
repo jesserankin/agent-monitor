@@ -20,6 +20,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Input, Label
 from textual.worker import Worker, WorkerState
 
+from agent_monitor.codex_sidecar import run_codex_sidecar
 from agent_monitor.hosts import HostAdapter, LocalHostAdapter
 from agent_monitor.hyprland import HyprlandMonitor, find_zellij_window, get_event_socket_path
 from agent_monitor.models import (
@@ -146,6 +147,24 @@ def _truncate(value: str, limit: int = 60) -> str:
     return value[: limit - 3] + "..."
 
 
+def _run_has_extra_telemetry(run: AgentRun) -> bool:
+    telemetry = run.telemetry
+    return (
+        telemetry.context_used_pct is not None
+        or (run.status == AgentStatus.ACTIVE and telemetry.active_since_ms is not None)
+    )
+
+
+def _render_run_time(run: AgentRun) -> Text:
+    if run.status != AgentStatus.ACTIVE:
+        return Text("")
+    telemetry = run.telemetry
+    if telemetry.active_since_ms is not None:
+        now_ms = int(time.time() * 1000)
+        return Text(_render_duration(max(0, now_ms - telemetry.active_since_ms)))
+    return Text("")
+
+
 class AgentMonitorApp(App):
     TITLE = "Agent Monitor"
     CSS_PATH = "monitor.tcss"
@@ -167,7 +186,7 @@ class AgentMonitorApp(App):
         self._workspace_group_available: bool = True
         self._sessions: dict[str, AgentSession] = {}
         self._statusline_data: dict[str, dict] = {}
-        self._statusline_columns_added: bool = False
+        self._telemetry_columns_added: bool = False
         self._group_col_key = None
         self._spinner_frame: int = 0
 
@@ -248,6 +267,8 @@ class AgentMonitorApp(App):
         self._snapshot = snapshot
         self._worktrees = {worktree.id: worktree for worktree in snapshot.worktrees}
         self._snapshot_runs = {self._run_row_key(run.id): run for run in snapshot.agent_runs}
+        if any(_run_has_extra_telemetry(run) for run in snapshot.agent_runs):
+            self._ensure_telemetry_columns()
 
         table = self.query_one(DataTable)
         next_keys = set(self._snapshot_runs)
@@ -295,7 +316,7 @@ class AgentMonitorApp(App):
                     Text(char, style="dark_orange"),
                 )
                 # Update live duration
-                if self._statusline_columns_added and session.active_since is not None:
+                if self._telemetry_columns_added and session.active_since is not None:
                     time_col = 8  # Host, WS, Client, Project, Branch, Status, Task, Context, Time
                     elapsed_ms = int((time.monotonic() - session.active_since) * 1000)
                     table.update_cell_at(
@@ -388,10 +409,7 @@ class AgentMonitorApp(App):
         self._statusline_data[name] = message.data
 
         # Ensure dynamic columns exist
-        if not self._statusline_columns_added:
-            table = self.query_one(DataTable)
-            table.add_columns("Context", "Time")
-            self._statusline_columns_added = True
+        self._ensure_telemetry_columns()
 
         # Find matching session and update it
         matched = self._find_session_for_statusline(name, message.data)
@@ -428,6 +446,14 @@ class AgentMonitorApp(App):
         for col_idx, value in enumerate(row_data):
             table.update_cell_at((row_idx, col_idx), value)
 
+    def _ensure_telemetry_columns(self) -> None:
+        """Ensure optional telemetry columns exist."""
+        if self._telemetry_columns_added:
+            return
+        table = self.query_one(DataTable)
+        table.add_columns("Context", "Time")
+        self._telemetry_columns_added = True
+
     def _render_run_row(self, snapshot: HostSnapshot, run: AgentRun) -> tuple:
         """Render a registry-backed agent run into DataTable cell values."""
         worktree = self._worktrees.get(run.worktree_id)
@@ -447,13 +473,13 @@ class AgentMonitorApp(App):
             Text(_truncate(task)),
         )
 
-        if self._statusline_columns_added:
+        if self._telemetry_columns_added:
             context = (
                 _render_context_bar(run.telemetry.context_used_pct)
                 if run.telemetry.context_used_pct is not None
                 else Text("")
             )
-            return base + (context, Text(""))
+            return base + (context, _render_run_time(run))
 
         return base
 
@@ -485,7 +511,7 @@ class AgentMonitorApp(App):
 
         base = ("local", str(group), "claude", name, "", status, task_styled)
 
-        if self._statusline_columns_added:
+        if self._telemetry_columns_added:
             context = _render_context_bar(session.context_used_pct) if session.context_used_pct is not None else Text("")
             if session.active_since is not None:
                 elapsed_ms = int((time.monotonic() - session.active_since) * 1000)
@@ -645,16 +671,47 @@ def main(argv: list[str] | None = None):
         parser.add_argument("--json", action="store_true", help="print the snapshot as JSON")
         parser.add_argument("--devtools-registry", help="path to dev-tools instances.json")
         parser.add_argument("--overlay", help="path to agent-monitor sessions.json")
+        parser.add_argument("--sidecar-runs-dir", help="path to agent-monitor sidecar runs directory")
         args = parser.parse_args(argv[1:])
         snapshot = LocalHostAdapter(
             devtools_registry_path=args.devtools_registry,
             overlay_path=args.overlay,
+            sidecar_runs_dir=args.sidecar_runs_dir,
         ).snapshot()
         if args.json:
             print(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
             return
         print(snapshot)
         return
+
+    if argv and argv[0] == "codex-sidecar":
+        parser = argparse.ArgumentParser(prog="agent-monitor codex-sidecar")
+        parser.add_argument("--run-id", required=True)
+        parser.add_argument("--worktree-id")
+        parser.add_argument("--cwd")
+        parser.add_argument("--zellij-session")
+        parser.add_argument("--sidecar-runs-dir")
+        parser.add_argument("--status-path")
+        parser.add_argument("--heartbeat-interval", type=float, default=5.0)
+        parser.add_argument("command", nargs=argparse.REMAINDER)
+        args = parser.parse_args(argv[1:])
+        command = args.command
+        if command and command[0] == "--":
+            command = command[1:]
+        if not command:
+            parser.error("command is required after --")
+
+        return_code = run_codex_sidecar(
+            run_id=args.run_id,
+            worktree_id=args.worktree_id,
+            cwd=args.cwd,
+            zellij_session=args.zellij_session,
+            runs_dir=args.sidecar_runs_dir,
+            status_path=args.status_path,
+            heartbeat_interval=args.heartbeat_interval,
+            command=command,
+        )
+        raise SystemExit(return_code)
 
     app = AgentMonitorApp()
     app.run()

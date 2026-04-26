@@ -74,6 +74,7 @@ class ClientTelemetry:
     tokens_used: int | None = None
     updated_at_ms: int | None = None
     active_since_ms: int | None = None
+    heartbeat_at_ms: int | None = None
     context_used_pct: float | None = None
     cost_usd: float | None = None
 
@@ -87,6 +88,7 @@ class ClientTelemetry:
             tokens_used=_optional_int(data.get("tokens_used")),
             updated_at_ms=_optional_int(data.get("updated_at_ms")),
             active_since_ms=_optional_int(data.get("active_since_ms")),
+            heartbeat_at_ms=_optional_int(data.get("heartbeat_at_ms")),
             context_used_pct=_optional_float(data.get("context_used_pct")),
             cost_usd=_optional_float(data.get("cost_usd")),
         )
@@ -98,6 +100,7 @@ class ClientTelemetry:
             "tokens_used": self.tokens_used,
             "updated_at_ms": self.updated_at_ms,
             "active_since_ms": self.active_since_ms,
+            "heartbeat_at_ms": self.heartbeat_at_ms,
             "context_used_pct": self.context_used_pct,
             "cost_usd": self.cost_usd,
         })
@@ -192,6 +195,7 @@ class AgentRun:
                 "updated_at_ms": data.get("updated_at_ms"),
                 "context_used_pct": data.get("context_used_pct"),
                 "cost_usd": data.get("cost_usd"),
+                "heartbeat_at_ms": data.get("heartbeat_at_ms"),
             }
         return cls(
             id=run_id,
