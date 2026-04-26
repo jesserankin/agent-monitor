@@ -832,6 +832,7 @@ def main(argv: list[str] | None = None):
         parser = argparse.ArgumentParser(prog="agent-monitor open-run")
         parser.add_argument("target", help="agent run id or dev-tools worktree id")
         parser.add_argument("--json", action="store_true", help="print a JSON response")
+        parser.add_argument("--no-attach", action="store_true", help="ensure the zellij session exists without opening a terminal")
         parser.add_argument("--devtools-registry", help="path to dev-tools instances.json")
         parser.add_argument("--overlay", help="path to agent-monitor sessions.json")
         parser.add_argument("--sidecar-runs-dir", help="path to agent-monitor sidecar runs directory")
@@ -841,7 +842,7 @@ def main(argv: list[str] | None = None):
             overlay_path=args.overlay,
             sidecar_runs_dir=args.sidecar_runs_dir,
         )
-        _handle_open_run_command(adapter, args.target, json_output=args.json)
+        _handle_open_run_command(adapter, args.target, json_output=args.json, attach=not args.no_attach)
         return
 
     if argv and argv[0] == "set-group":
@@ -919,6 +920,7 @@ def _handle_open_run_command(
     target: str,
     *,
     json_output: bool,
+    attach: bool = True,
 ) -> None:
     snapshot = adapter.snapshot()
     run, resolved_as = _resolve_run_or_worktree(snapshot, target)
@@ -930,7 +932,12 @@ def _handle_open_run_command(
         )
         return
 
-    opened = adapter.open_run(run)
+    if attach:
+        opened_run = run
+        opened = adapter.open_run(run)
+    else:
+        opened_run = adapter.ensure_run_session(run)
+        opened = opened_run is not None
     if not opened:
         _finish_cli_response(
             _error_payload("open_failed", f"failed to open run: {run.id}", command="open-run", target=target),
@@ -939,7 +946,7 @@ def _handle_open_run_command(
         )
         return
 
-    refreshed_run = _resolve_exact_run(adapter.snapshot(), run.id) or run
+    refreshed_run = _resolve_exact_run(adapter.snapshot(), run.id) or opened_run or run
     _finish_cli_response(
         {
             "ok": True,

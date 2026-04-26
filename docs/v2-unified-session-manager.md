@@ -491,7 +491,7 @@ Implemented and verified unless noted:
 - Codex sidecar telemetry is keyed by the wrapped process tree's Codex `process_uuid` pid when available, then locks onto the observed thread id so multiple Codex runs in the same cwd do not overwrite each other's title/status.
 - When an overlay run already has `client_ids.codex_thread_id`, `LocalHostAdapter` passes it to `agent-monitor codex-sidecar --codex-thread-id ...`; the telemetry reader prefers that expected thread before cwd fallback so resumed same-cwd runs do not drift to a newer unrelated thread.
 - The telemetry reader is optional and resilient: missing or locked SQLite files fall back to process-lifecycle `running` heartbeats.
-- Full test suite currently passes: `scripts/test` reports `303 passed`.
+- Full test suite currently passes: `scripts/test` reports `307 passed`.
 
 Known manual behavior:
 
@@ -779,9 +779,10 @@ Implemented points:
   latest snapshot.
 - The default TUI adapter is now `configured_host_adapter()`: local-only when no
   remotes are configured, local-plus-SSH when remotes exist.
-- Remote `open_run` asks the owning host to resolve/open the run through its
-  local command surface, then opens a local SSH terminal attach when the returned
-  run has a zellij session.
+- Remote `open_run` asks the owning host to resolve and ensure the run's zellij
+  session through `open-run --no-attach --json`, then opens a local SSH terminal
+  attach when the returned run has a zellij session. This avoids relying on the
+  remote helper to launch a GUI terminal on the remote host.
 - Tests cover config parsing, SSH command JSON parsing, SSH terminal attach
   command construction, SSH host adapter snapshot/open/group behavior, and
   multi-host action routing.
@@ -792,10 +793,9 @@ Known limitations:
 - The merged TUI still relies on globally unique run/worktree ids. If the same
   ids appear on multiple hosts, host-aware row keys or visible host labels should
   be added before relying on those duplicate rows.
-- Remote creation of a brand-new zellij session still depends on the current
-  remote `agent-monitor open-run` behavior. A future helper may need a
-  non-terminal "ensure session" command so SSH attaches never require a remote
-  GUI terminal.
+- Remote session creation is now non-terminal, but should still be manually
+  verified against a real remote for both existing saved sessions and stopped
+  rows that need a new zellij session.
 
 ### Resume Here: Manual SSH Verification
 

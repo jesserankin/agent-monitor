@@ -255,6 +255,47 @@ def test_local_host_adapter_does_not_launch_command_for_existing_session(tmp_pat
     )
 
 
+def test_local_host_adapter_ensure_run_session_creates_missing_saved_session(tmp_path):
+    adapter = LocalHostAdapter(overlay_path=tmp_path / "sessions.json")
+    run = AgentRun(
+        id="project::branch::main",
+        worktree_id="project::branch",
+        client=ClientName.CODEX,
+        zellij_session="project-branch",
+        cwd="/repo/project/.worktrees/branch",
+    )
+
+    with patch("agent_monitor.hosts.list_sessions", return_value=[]), \
+         patch("agent_monitor.hosts.ensure_session", return_value=True) as mock_ensure:
+        updated = adapter.ensure_run_session(run)
+
+    assert updated == run
+    assert adapter.last_open_action == "created_session"
+    mock_ensure.assert_called_once_with(
+        "project-branch",
+        cwd="/repo/project/.worktrees/branch",
+        launch_argv=[
+            sys.executable,
+            "-m",
+            "agent_monitor",
+            "codex-sidecar",
+            "--run-id",
+            "project::branch::main",
+            "--worktree-id",
+            "project::branch",
+            "--cwd",
+            "/repo/project/.worktrees/branch",
+            "--zellij-session",
+            "project-branch",
+            "--",
+            "codex",
+            "--cd",
+            "/repo/project/.worktrees/branch",
+        ],
+        pane_name="agent",
+    )
+
+
 def test_local_host_adapter_focuses_existing_zellij_window_instead_of_duplicate_attach(tmp_path):
     adapter = LocalHostAdapter(overlay_path=tmp_path / "sessions.json")
     run = AgentRun(
@@ -382,7 +423,7 @@ def test_ssh_host_adapter_open_run_calls_remote_helper_and_opens_local_ssh_attac
     with patch("agent_monitor.hosts.open_ssh_zellij_attach", return_value=True) as mock_attach:
         assert adapter.open_run(run) is True
 
-    assert transport.calls == [["open-run", "project::branch::main", "--json"]]
+    assert transport.calls == [["open-run", "project::branch::main", "--json", "--no-attach"]]
     mock_attach.assert_called_once_with("ssh-host", "project-branch", workspace_group=4)
     assert adapter.last_open_action == "opened_ssh_terminal"
 

@@ -146,6 +146,38 @@ def test_open_run_cli_uses_existing_default_run_for_bare_worktree_target(tmp_pat
     ]
 
 
+def test_open_run_cli_no_attach_ensures_session_without_opening_terminal(tmp_path, capsys, monkeypatch):
+    registry_path = tmp_path / "instances.json"
+    overlay_path = tmp_path / "sessions.json"
+    _write_devtools_registry(registry_path)
+    ensured = []
+
+    def fake_ensure(session_name, **kwargs):
+        ensured.append((session_name, kwargs))
+        return True
+
+    monkeypatch.setattr("agent_monitor.hosts.list_sessions", lambda: [])
+    monkeypatch.setattr("agent_monitor.hosts.ensure_session", fake_ensure)
+    monkeypatch.setattr("agent_monitor.hosts.attach_session", lambda *_args, **_kwargs: False)
+
+    main([
+        "open-run",
+        "project::branch",
+        "--json",
+        "--no-attach",
+        "--devtools-registry",
+        str(registry_path),
+        "--overlay",
+        str(overlay_path),
+    ])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["action"] == "created_session"
+    assert payload["run"]["zellij_session"] == "project-branch"
+    assert ensured[0][0] == "project-branch"
+
+
 def test_set_group_cli_resolves_worktree_id_and_persists_default_run(tmp_path, capsys):
     registry_path = tmp_path / "instances.json"
     overlay_path = tmp_path / "sessions.json"

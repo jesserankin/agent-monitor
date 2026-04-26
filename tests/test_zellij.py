@@ -9,6 +9,7 @@ from agent_monitor.zellij import (
     attach_session,
     context_used_pct_from_panes,
     create_session_with_command,
+    ensure_session,
     list_panes,
     list_sessions,
     middle_workspace_for_group,
@@ -354,6 +355,27 @@ def test_create_session_with_command_runs_create_then_command():
         "--cd",
         "/repo/worktree",
     ]
+
+
+def test_ensure_session_returns_true_when_session_exists():
+    with patch("agent_monitor.zellij.list_sessions", return_value=["s"]), \
+         patch("agent_monitor.zellij.subprocess.run") as mock_run:
+        assert ensure_session("s") is True
+
+    mock_run.assert_not_called()
+
+
+def test_ensure_session_creates_background_session_without_terminal_attach():
+    with patch("agent_monitor.zellij.list_sessions", return_value=[]), \
+         patch("agent_monitor.zellij.subprocess.run") as mock_run:
+        assert ensure_session("s", cwd="/repo") is True
+
+    mock_run.assert_called_once_with(
+        zellij_create_background_command("s", cwd="/repo"),
+        capture_output=True,
+        check=True,
+        timeout=10,
+    )
 
 
 def test_attach_session_returns_false_without_terminal():

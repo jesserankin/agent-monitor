@@ -168,6 +168,35 @@ def create_session_with_command(
     return True
 
 
+def ensure_session(
+    session_name: str,
+    *,
+    cwd: str | None = None,
+    launch_argv: Sequence[str] | None = None,
+    pane_name: str | None = None,
+) -> bool:
+    """Ensure a zellij session exists without opening a terminal attach client."""
+    if session_name in list_sessions():
+        return True
+    if launch_argv:
+        return create_session_with_command(
+            session_name,
+            launch_argv,
+            cwd=cwd,
+            pane_name=pane_name,
+        )
+    try:
+        subprocess.run(
+            zellij_create_background_command(session_name, cwd=cwd),
+            capture_output=True,
+            check=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+    return True
+
+
 def terminal_attach_command(
     session_name: str,
     terminal: str | None = None,

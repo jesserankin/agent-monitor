@@ -23,7 +23,7 @@ from agent_monitor.registry import (
 )
 from agent_monitor.ssh import SshCommandError, SshTransport, open_ssh_zellij_attach
 from agent_monitor.workspace import focus_window_sync, move_window_to_workspace, switch_to_group_sync
-from agent_monitor.zellij import attach_session, middle_workspace_for_group, session_name_for_run_id
+from agent_monitor.zellij import attach_session, ensure_session, list_sessions, middle_workspace_for_group, session_name_for_run_id
 
 
 class HostAdapter(Protocol):
@@ -104,6 +104,37 @@ class LocalHostAdapter:
             self.last_open_action = "created_session" if create else "opened_terminal"
         return opened
 
+    def ensure_run_session(self, run: AgentRun) -> AgentRun | None:
+        """Ensure the run's zellij session exists without opening a terminal."""
+        self.last_open_action = None
+        worktree = self._worktree_for_run(run)
+        if not run.zellij_session:
+            run = set_overlay_zellij_session(
+                run,
+                session_name_for_run_id(run.id),
+                self.overlay_path,
+            )
+
+        if not run.zellij_session:
+            return None
+
+        create = run.zellij_session not in set(list_sessions())
+        launch_argv = _launch_argv_for_run(run, worktree) if create else None
+        if launch_argv and worktree and worktree.containerized:
+            if not _ensure_devcontainer_running(worktree):
+                return None
+
+        if not ensure_session(
+            run.zellij_session,
+            cwd=run.cwd,
+            launch_argv=launch_argv,
+            pane_name=run.agent_pane or "agent",
+        ):
+            return None
+
+        self.last_open_action = "created_session" if create else "existing_session"
+        return run
+
     def _worktree_for_run(self, run: AgentRun) -> Worktree | None:
         for worktree in read_devtools_worktrees(self.devtools_registry_path):
             if worktree.id == run.worktree_id:
@@ -145,7 +176,7 @@ class SshHostAdapter:
 
     def open_run(self, run: AgentRun) -> bool:
         self.last_open_action = None
-        data = self.transport.run_json(["open-run", run.id, "--json"])
+        data = self.transport.run_json(["open-run", run.id, "--json", "--no-attach"])
         if data.get("ok") is not True:
             return False
         self.last_open_action = _optional_str(data.get("action"))
