@@ -443,7 +443,7 @@ The implementation should not wait for the full devcontainer lifecycle to be sta
 
 ## Current Implementation Status (2026-04-25)
 
-Implemented and manually verified:
+Implemented and verified unless noted:
 
 - Normalized models exist in `models.py`: `HostSnapshot`, `Worktree`, `AgentRun`, `AgentStatus`, `ClientTelemetry`.
 - `registry.py` reads `~/.config/dev_tools/instances.json`, reads/writes `~/.config/agent-monitor/sessions.json`, and merges stopped worktrees with overlay runs.
@@ -464,7 +464,13 @@ Implemented and manually verified:
 - `Enter` on a row without a saved zellij session creates a stable zellij session name from the run id, persists it to the overlay, and opens it with `zellij attach --create ... options --default-cwd <worktree-cwd>`.
 - New zellij session creation can now launch an initial client command. It uses the run's persisted `launch.argv` when present, and defaults to `codex --cd <cwd>` for Codex runs. Codex commands are wrapped through `agent-monitor codex-sidecar`.
 - Rows with `client=unknown` and no launch command still open as plain zellij rooted in the worktree.
-- Full test suite currently passes: `scripts/test` reports `211 passed`.
+- `clients/codex.py` reads optional Codex SQLite telemetry from `~/.codex/state_5.sqlite` and `~/.codex/logs_2.sqlite`.
+- `agent-monitor codex-sidecar` polls the Codex telemetry reader while the wrapped process is alive and writes richer sidecar statuses when available.
+- Codex response events currently map `response.created` / `response.in_progress` to `active`, `response.completed` to `idle`, and best-effort approval/input markers to `waiting_approval` / `waiting_input`.
+- Codex telemetry includes thread id, title, model, token count, updated timestamp, active turn start, and estimated context percentage when those fields are present.
+- Codex sidecar telemetry is keyed by the wrapped process tree's Codex `process_uuid` pid when available, then locks onto the observed thread id so multiple Codex runs in the same cwd do not overwrite each other's title/status.
+- The telemetry reader is optional and resilient: missing or locked SQLite files fall back to process-lifecycle `running` heartbeats.
+- Full test suite currently passes: `scripts/test` reports `224 passed`.
 
 Known manual behavior:
 
@@ -472,34 +478,53 @@ Known manual behavior:
 - Pressing `Enter` on its running row switches/focuses the existing zellij terminal instead of opening a duplicate.
 - Stopping that Codex process and pressing `Enter` reopens/attaches the saved zellij session.
 - Creating a zellij session for a Codex row with no saved session now starts Codex in the session before attaching.
+- A manually wrapped Codex run now resolves to its own thread/title in a same-cwd scenario, moves from `running` to `active`, and settles on `idle` after completion.
 
 Recommended next slices:
 
-1. **Map Codex live events into the sidecar**: subscribe to app-server or log events and update sidecar status to `active`, `idle`, `waiting_input`, or `waiting_approval`.
-2. **Make row identity less synthetic**: distinguish worktree-level default rows from concrete agent-run rows so multiple Codex runs in one worktree can be represented cleanly.
-3. **Add Codex SQLite telemetry**: read `~/.codex/state_5.sqlite` for thread title/model/token/updated metadata and attach it to matched runs when the sidecar lacks those fields.
+1. **Make row identity less synthetic**: distinguish worktree-level default rows from concrete agent-run rows so multiple Codex runs in one worktree can be represented cleanly.
+2. **Improve Codex identity matching**: pass known thread ids into the wrapper when available so resumed threads do not depend on process-log discovery.
+3. **Harden approval/input wait mapping**: identify stable Codex log/app-server markers for blocked states beyond the current best-effort text matching.
 4. **Add explicit CLI helpers**: `agent-monitor set-group`, `agent-monitor open-run`, and eventually remote-safe JSON responses.
 5. **Remote support**: add config parsing and SSH host adapter once the local command surface is stable.
 
-### Resume Here: Codex Live Status Mapping
+### Completed Slice: Codex SQLite Live Status Mapping
 
-The current sidecar wrapper only tracks Codex process lifecycle:
+Goal: wrapped Codex runs should publish richer sidecar state without making the
+TUI depend directly on Codex's private SQLite files.
 
-- `running` while the Codex process is alive
-- `stopped` when the Codex process exits with code `0`
-- `error` when Codex exits nonzero or fails to launch
-- `heartbeat_at_ms` for freshness, not for the `Time` column
+Implemented points:
 
-The next chat should start by finding the best local source for richer Codex state
-and translating it into sidecar updates. Candidate sources are Codex app-server
-events and `~/.codex/logs_2.sqlite`. The desired mappings are:
+- Recent `~/.codex/logs_2.sqlite` rows were inspected. The useful structured
+  signals are response websocket event types inside `feedback_log_body`,
+  especially `response.created`, `response.in_progress`, and
+  `response.completed`, plus the turn span's `cwd`, `thread_id`, and `model`.
+- `~/.codex/state_5.sqlite` is used for static thread metadata: title, model,
+  token count, cwd, thread id, and updated timestamp.
+- `clients/codex.py` adds a resilient `CodexTelemetryReader` that returns
+  `None` if the SQLite files are missing, locked, or do not contain a matching
+  thread.
+- `codex_sidecar.py` polls that reader on heartbeats and folds returned fields
+  into the existing generic sidecar payload.
+- The sidecar passes the wrapped process pid into the reader; the reader expands
+  that pid through `/proc/.../children` because the `codex` launcher can spawn
+  the real Codex binary as a child. Codex log `process_uuid` values include that
+  real process pid, which prevents same-cwd runs from drifting onto newer
+  unrelated threads.
+- After the first matching live event is observed, the reader locks onto that
+  thread id for subsequent metadata/title reads.
+- Final `stopped` / `error` lifecycle writes still win when the child process
+  exits.
+- Tests use fixture SQLite DBs and sidecar fakes so the mapping is deterministic.
+
+Current mappings:
 
 | Codex condition | Sidecar status | Extra fields |
 |-----------------|----------------|--------------|
-| Turn/tool call running | `active` | set `active_since_ms`; update `heartbeat_at_ms` |
-| Turn complete and client open | `idle` | clear `active_since_ms`; update `updated_at_ms` |
-| Approval required | `waiting_approval` | clear `active_since_ms`; optional title/detail |
-| User input required | `waiting_input` | clear `active_since_ms`; optional title/detail |
+| `response.created` / `response.in_progress` or active turn span | `active` | set `active_since_ms`; update `heartbeat_at_ms` |
+| `response.completed` | `idle` | clear `active_since_ms`; update `updated_at_ms` |
+| Best-effort approval request/pending marker | `waiting_approval` | clear `active_since_ms` |
+| Best-effort user-input marker | `waiting_input` | clear `active_since_ms` |
 | Process alive but no rich state | `running` | update `heartbeat_at_ms` only |
 
 Important UI semantics:
@@ -513,19 +538,42 @@ Important UI semantics:
   `waiting_input` row should remain that status even if host `/proc` sees a
   related Codex process.
 
-Suggested first implementation slice:
+Known limitations:
 
-1. Inspect recent `~/.codex/logs_2.sqlite` rows by `target`/`module_path` and
-   identify events that correspond to thread status changes, approval waits, and
-   turn start/end. Avoid depending on message text if a structured field exists.
-2. Add a small Codex telemetry reader in a new `clients/codex.py` or adjacent
-   module. Keep it optional and resilient if the SQLite DB is missing or locked.
-3. Extend `agent-monitor codex-sidecar` to poll/subscribe to that reader while
-   the child Codex process is alive, writing sidecar status updates.
-4. Add tests with fixture log/state SQLite files or narrow fakes so the mapping
-   is deterministic.
-5. Verify manually with a real Codex run: prompt active work, approval wait,
-   idle after completion, and clean quit.
+- Approval and input waits are currently best-effort because the inspected logs
+  did not expose a stable, dedicated wait-state event in the sample set.
+- When no process pid or thread id is available, live-log matching falls back to
+  recent rows with `cwd=<path>`, so multiple live threads in the same worktree
+  can still collide on non-wrapper call paths.
+- The reader polls SQLite on sidecar heartbeats. A direct app-server subscription
+  may be preferable later if Codex exposes a stable supported protocol.
+
+### Completed Slice: Codex Live Status Manual Verification
+
+Manual verification covered a real wrapped Codex run in the same cwd as another
+active Codex session:
+
+- The initial cwd-only mapper drifted onto the wrong same-cwd thread and title.
+- Matching by the wrapped process tree's Codex `process_uuid` pid fixed the
+  same-cwd title/status collision.
+- Neutral process noise and post-completion token-usage rows no longer demote
+  an `idle` run back to `running`.
+- The manual run moved from `running` to `active` during work and settled on
+  `idle` after completion.
+
+### Resume Here: Agent Run Identity Cleanup
+
+The next chat should address row identity now that wrapped Codex live status is
+usable:
+
+1. Distinguish worktree-level default rows from concrete agent-run rows in the
+   normalized model and TUI.
+2. Preserve multiple Codex runs for one worktree instead of merging by
+   `worktree_id + client` when sidecar thread/run identity is available.
+3. Decide how `Enter` should behave on a worktree row versus a concrete run row:
+   create/open default run for the worktree, or attach to the selected run.
+4. Add tests for two Codex sidecar files in the same worktree with distinct
+   run ids/thread ids so both rows survive registry merge and render distinctly.
 
 ### Completed Slice: Launch Codex on Session Creation
 
@@ -587,8 +635,9 @@ Implemented points:
 - [x] Add generic agent-monitor sidecar reader for client live status
 - [x] Add Codex wrapper that writes sidecar heartbeat and exit status
 - [x] Add baseline Codex process/zellij/CWD discovery
-- [ ] Add Codex adapter with baseline SQLite metadata from `~/.codex/state_5.sqlite`
-- Add optional Codex app-server event support that writes sidecar updates for rich live status (`active`, `idle`, `waiting_input`, `waiting_approval`, token usage)
+- [x] Add Codex adapter with baseline SQLite metadata from `~/.codex/state_5.sqlite`
+- [x] Add optional Codex log-event support that writes sidecar updates for rich live status (`active`, `idle`, `waiting_input`, `waiting_approval`, token usage)
+- [ ] Verify and harden approval/input wait mapping against real wrapped Codex runs
 - Keep unknown/custom clients discoverable by process name, cwd, zellij session, and optional generic monitor JSON
 
 ### Phase 4: SSH Remote Support
@@ -639,7 +688,7 @@ Implemented points:
 | `zellij.py` | Partial | Session names, terminal attach commands, middle workspace placement |
 | `clients/base.py` | Planned | Client adapter protocol and shared status mapping |
 | `clients/claude.py` | Planned | Claude title/statusline adapter |
-| `clients/codex.py` | Planned | Codex process/SQLite/app-server adapter |
+| `clients/codex.py` | Partial | Optional Codex SQLite metadata and log-event live status reader |
 | `devcontainer.py` | Planned | Container status checks used for TUI indicators and open-run capabilities |
 | `ssh.py` | Planned | Transport for remote helper commands and remote zellij attach |
 | `worktree.py` | Planned | Thin wrapper around `mix dev_tools.create_worktree` / `remove_worktree` via shell or SSH |

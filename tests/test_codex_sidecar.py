@@ -3,6 +3,7 @@
 import json
 
 from agent_monitor.codex_sidecar import run_codex_sidecar
+from agent_monitor.clients.codex import CodexTelemetry
 from agent_monitor.models import AgentStatus
 
 
@@ -160,3 +161,67 @@ def test_run_codex_sidecar_treats_clean_interrupt_as_stopped(tmp_path):
     assert payload["status"] == AgentStatus.STOPPED.value
     assert payload["exit_code"] == 0
     assert "error" not in payload
+
+
+def test_run_codex_sidecar_writes_rich_telemetry_when_available(tmp_path):
+    status_path = tmp_path / "status.json"
+    process = FakeProcess(return_code=0)
+    telemetry_calls = 0
+
+    def telemetry_reader():
+        nonlocal telemetry_calls
+        telemetry_calls += 1
+        return CodexTelemetry(
+            status=AgentStatus.ACTIVE,
+            thread_id="thread-1",
+            title="Task title",
+            model="gpt-5.5",
+            tokens_used=123,
+            updated_at_ms=2000,
+            active_since_ms=1500,
+            context_used_pct=25.0,
+        )
+
+    run_codex_sidecar(
+        run_id="project::branch::main",
+        status_path=status_path,
+        heartbeat_interval=0,
+        command=["codex"],
+        telemetry_reader=telemetry_reader,
+        popen_factory=lambda *_args, **_kwargs: process,
+        sleep=lambda _seconds: None,
+        now_ms=lambda: 3000,
+    )
+
+    assert telemetry_calls == 1
+    payload = json.loads(status_path.read_text())
+    assert payload["status"] == AgentStatus.STOPPED.value
+    assert payload["exit_code"] == 0
+
+
+def test_run_codex_sidecar_active_heartbeat_includes_active_since(tmp_path):
+    status_path = tmp_path / "status.json"
+    process = FakeProcess(return_code=0)
+    process.poll_count = -100
+
+    def sleep(_seconds):
+        payload = json.loads(status_path.read_text())
+        if payload["status"] == AgentStatus.ACTIVE.value:
+            assert payload["active_since_ms"] == 1500
+            assert payload["thread_id"] == "thread-1"
+            raise KeyboardInterrupt()
+
+    run_codex_sidecar(
+        run_id="project::branch::main",
+        status_path=status_path,
+        heartbeat_interval=0,
+        command=["codex"],
+        telemetry_reader=lambda: CodexTelemetry(
+            status=AgentStatus.ACTIVE,
+            thread_id="thread-1",
+            active_since_ms=1500,
+        ),
+        popen_factory=lambda *_args, **_kwargs: process,
+        sleep=sleep,
+        now_ms=lambda: 3000,
+    )
