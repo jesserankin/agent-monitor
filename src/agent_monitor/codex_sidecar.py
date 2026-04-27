@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from collections.abc import Callable, Sequence
@@ -36,10 +37,12 @@ def run_codex_sidecar(
     popen_factory: Callable[..., Any] = subprocess.Popen,
     sleep: Callable[[float], None] = time.sleep,
     now_ms: Callable[[], int] = current_time_ms,
+    environ: dict[str, str] | None = None,
 ) -> int:
     """Run Codex while maintaining a sidecar status file."""
     if not command:
         raise ValueError("command is required")
+    environ = environ if environ is not None else os.environ
 
     resolved_status_path = sidecar_status_path(
         run_id,
@@ -58,7 +61,7 @@ def run_codex_sidecar(
             worktree_id=worktree_id,
             status=telemetry.status if telemetry and telemetry.status is not None else status,
             cwd=cwd,
-            zellij_session=zellij_session,
+            zellij_session=_current_zellij_session(zellij_session, environ),
             telemetry=telemetry,
             heartbeat_at_ms=now_ms(),
             exit_code=exit_code,
@@ -90,7 +93,7 @@ def run_codex_sidecar(
                 telemetry = _read_telemetry(telemetry_reader)
                 telemetry = _with_zellij_context(
                     telemetry,
-                    zellij_session=zellij_session,
+                    zellij_session=_current_zellij_session(zellij_session, environ),
                     zellij_context_reader=zellij_context_reader,
                 )
                 write_status(AgentStatus.RUNNING, telemetry=telemetry)
@@ -184,6 +187,13 @@ def _with_zellij_context(
     if telemetry is None:
         return CodexTelemetry(context_used_pct=context_used_pct)
     return replace(telemetry, context_used_pct=context_used_pct)
+
+
+def _current_zellij_session(fallback: str | None, environ: dict[str, str]) -> str | None:
+    live_session = environ.get("ZELLIJ_SESSION_NAME")
+    if live_session:
+        return live_session
+    return fallback
 
 
 def _safe_write_status(path: Path, payload: dict[str, Any]) -> None:

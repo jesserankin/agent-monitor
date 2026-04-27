@@ -63,6 +63,7 @@ def test_run_codex_sidecar_writes_running_heartbeat_and_stopped(tmp_path):
         popen_factory=popen_factory,
         sleep=lambda _seconds: None,
         now_ms=lambda: next(times),
+        environ={},
     )
 
     assert return_code == 0
@@ -77,6 +78,44 @@ def test_run_codex_sidecar_writes_running_heartbeat_and_stopped(tmp_path):
     assert payload["heartbeat_at_ms"] == 1200
     assert payload["exit_code"] == 0
     assert "active_since_ms" not in payload
+
+
+def test_run_codex_sidecar_prefers_live_zellij_session_env_over_launch_metadata(tmp_path):
+    status_path = tmp_path / "status.json"
+
+    run_codex_sidecar(
+        run_id="project::branch::main",
+        status_path=status_path,
+        zellij_session="stale-session",
+        heartbeat_interval=0,
+        command=["codex"],
+        popen_factory=lambda *_args, **_kwargs: FakeProcess(return_code=0),
+        sleep=lambda _seconds: None,
+        now_ms=lambda: 1000,
+        environ={"ZELLIJ_SESSION_NAME": "live-session"},
+    )
+
+    payload = json.loads(status_path.read_text())
+    assert payload["zellij_session"] == "live-session"
+
+
+def test_run_codex_sidecar_falls_back_to_launch_zellij_session_when_env_absent(tmp_path):
+    status_path = tmp_path / "status.json"
+
+    run_codex_sidecar(
+        run_id="project::branch::main",
+        status_path=status_path,
+        zellij_session="launch-session",
+        heartbeat_interval=0,
+        command=["codex"],
+        popen_factory=lambda *_args, **_kwargs: FakeProcess(return_code=0),
+        sleep=lambda _seconds: None,
+        now_ms=lambda: 1000,
+        environ={},
+    )
+
+    payload = json.loads(status_path.read_text())
+    assert payload["zellij_session"] == "launch-session"
 
 
 def test_run_codex_sidecar_running_status_does_not_include_active_since(tmp_path):
@@ -285,8 +324,43 @@ def test_run_codex_sidecar_prefers_zellij_context_title(tmp_path):
             popen_factory=lambda *_args, **_kwargs: process,
             sleep=sleep,
             now_ms=lambda: 3000,
+            environ={},
         )
 
+    assert any(payload.get("context_used_pct") == 46.0 for payload in payloads)
+
+
+def test_run_codex_sidecar_reads_zellij_context_from_live_session_env(tmp_path):
+    status_path = tmp_path / "status.json"
+    process = FakeProcess(return_code=0)
+    process.poll_count = -100
+    payloads = []
+
+    def capture_status(path, payload):
+        payloads.append(payload)
+        path.write_text(json.dumps(payload))
+
+    def sleep(_seconds):
+        payload = json.loads(status_path.read_text())
+        if payload.get("context_used_pct") == 46.0:
+            raise KeyboardInterrupt()
+
+    with patch("agent_monitor.codex_sidecar.write_sidecar_status", side_effect=capture_status):
+        run_codex_sidecar(
+            run_id="project::branch::main",
+            status_path=status_path,
+            zellij_session="stale-session",
+            heartbeat_interval=0,
+            command=["codex"],
+            telemetry_reader=lambda: None,
+            zellij_context_reader=lambda session: 46.0 if session == "live-session" else None,
+            popen_factory=lambda *_args, **_kwargs: process,
+            sleep=sleep,
+            now_ms=lambda: 3000,
+            environ={"ZELLIJ_SESSION_NAME": "live-session"},
+        )
+
+    assert any(payload.get("zellij_session") == "live-session" for payload in payloads)
     assert any(payload.get("context_used_pct") == 46.0 for payload in payloads)
 
 
