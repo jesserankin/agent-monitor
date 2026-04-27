@@ -3,10 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import subprocess
 
 logger = logging.getLogger(__name__)
+
+
+def workspace_id_for_group(group: int) -> int:
+    """Return a local Hyprland workspace id for a logical workspace group.
+
+    Workspace groups are stored as 1-9, but the concrete workspace id depends on
+    the local monitor layout. On the three-monitor setup the middle monitor uses
+    11-19; on a single laptop panel it is usually 1-9.
+    """
+    if not 1 <= group <= 9:
+        raise ValueError(f"Workspace group must be 1-9, got {group}")
+
+    base = _workspace_base_for_current_monitors(_fetch_monitors_sync())
+    if base is None:
+        base = 10
+    return base + group
 
 
 async def switch_to_group(group: int) -> None:
@@ -59,6 +76,61 @@ def switch_to_group_sync(group: int) -> bool:
         logger.warning("workspace-group %d failed", group)
         return False
     return True
+
+
+def _fetch_monitors_sync() -> list[dict]:
+    try:
+        result = subprocess.run(
+            ["hyprctl", "monitors", "-j"],
+            capture_output=True,
+            check=True,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return []
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _workspace_base_for_current_monitors(monitors: list[dict]) -> int | None:
+    bases: list[int] = []
+    focused_base: int | None = None
+    for monitor in monitors:
+        if monitor.get("disabled") is True:
+            continue
+        base = _workspace_base_for_monitor(monitor)
+        if base is None:
+            continue
+        if base not in bases:
+            bases.append(base)
+        if monitor.get("focused") is True:
+            focused_base = base
+
+    if not bases:
+        return None
+    if len(bases) == 1:
+        return bases[0]
+    if 10 in bases:
+        return 10
+    if focused_base is not None:
+        return focused_base
+    return bases[0]
+
+
+def _workspace_base_for_monitor(monitor: dict) -> int | None:
+    active_workspace = monitor.get("activeWorkspace")
+    if not isinstance(active_workspace, dict):
+        return None
+    workspace_id = active_workspace.get("id")
+    if not isinstance(workspace_id, int) or workspace_id <= 0 or workspace_id % 10 == 0:
+        return None
+    return (workspace_id // 10) * 10
 
 
 async def focus_window(address: str) -> None:

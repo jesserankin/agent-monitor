@@ -1,6 +1,8 @@
 """Tests for workspace switching."""
 
 import asyncio
+import json
+import subprocess
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,6 +13,7 @@ from agent_monitor.workspace import (
     move_window_to_workspace,
     switch_to_group,
     switch_to_group_sync,
+    workspace_id_for_group,
 )
 
 
@@ -154,6 +157,56 @@ def test_switch_to_group_sync_rejects_invalid_group():
 def test_switch_to_group_sync_returns_false_on_failure():
     with patch("agent_monitor.workspace.subprocess.run", side_effect=OSError("missing")):
         assert switch_to_group_sync(4) is False
+
+
+def test_workspace_id_for_group_uses_single_monitor_workspace_block():
+    monitors = [
+        {
+            "name": "eDP-1",
+            "activeWorkspace": {"id": 2, "name": "2"},
+            "focused": True,
+        }
+    ]
+    completed = subprocess.CompletedProcess(["hyprctl"], 0, stdout=json.dumps(monitors))
+
+    with patch("agent_monitor.workspace.subprocess.run", return_value=completed):
+        assert workspace_id_for_group(7) == 7
+
+
+def test_workspace_id_for_group_preserves_middle_monitor_when_available():
+    monitors = [
+        {"name": "left", "activeWorkspace": {"id": 4, "name": "4"}},
+        {"name": "middle", "activeWorkspace": {"id": 14, "name": "14"}},
+        {"name": "right", "activeWorkspace": {"id": 24, "name": "24"}},
+    ]
+    completed = subprocess.CompletedProcess(["hyprctl"], 0, stdout=json.dumps(monitors))
+
+    with patch("agent_monitor.workspace.subprocess.run", return_value=completed):
+        assert workspace_id_for_group(7) == 17
+
+
+def test_workspace_id_for_group_uses_only_visible_workspace_block():
+    monitors = [
+        {
+            "name": "external",
+            "activeWorkspace": {"id": 14, "name": "14"},
+            "focused": True,
+        }
+    ]
+    completed = subprocess.CompletedProcess(["hyprctl"], 0, stdout=json.dumps(monitors))
+
+    with patch("agent_monitor.workspace.subprocess.run", return_value=completed):
+        assert workspace_id_for_group(7) == 17
+
+
+def test_workspace_id_for_group_falls_back_to_middle_workspace():
+    with patch("agent_monitor.workspace.subprocess.run", side_effect=OSError("missing")):
+        assert workspace_id_for_group(7) == 17
+
+
+def test_workspace_id_for_group_rejects_invalid_group():
+    with pytest.raises(ValueError, match="1-9"):
+        workspace_id_for_group(10)
 
 
 def test_move_window_to_workspace():

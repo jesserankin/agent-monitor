@@ -22,8 +22,8 @@ from agent_monitor.registry import (
     set_overlay_zellij_session,
 )
 from agent_monitor.ssh import SshCommandError, SshTransport, open_ssh_zellij_attach
-from agent_monitor.workspace import focus_window_sync, move_window_to_workspace, switch_to_group_sync
-from agent_monitor.zellij import attach_session, ensure_session, list_sessions, middle_workspace_for_group, session_name_for_run_id
+from agent_monitor.workspace import focus_window_sync, move_window_to_workspace, switch_to_group_sync, workspace_id_for_group
+from agent_monitor.zellij import attach_session, ensure_session, list_sessions, session_name_for_run_id
 
 
 class HostAdapter(Protocol):
@@ -303,7 +303,7 @@ def _move_window_for_run(run: AgentRun, window: dict) -> bool:
     address = window.get("address")
     if not isinstance(address, str) or not address:
         return False
-    return move_window_to_workspace(address, middle_workspace_for_group(run.workspace_group))
+    return move_window_to_workspace(address, workspace_id_for_group(run.workspace_group))
 
 
 def _run_from_command_payload(data: dict, *, fallback: AgentRun) -> AgentRun:

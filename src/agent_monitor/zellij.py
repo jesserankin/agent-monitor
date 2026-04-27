@@ -10,6 +10,8 @@ import shutil
 import shlex
 import subprocess
 
+from agent_monitor.workspace import workspace_id_for_group
+
 CONTEXT_USED_TITLE_RE = re.compile(r"\bContext\s+(\d+(?:\.\d+)?)%\s+used\b", re.IGNORECASE)
 
 
@@ -249,7 +251,7 @@ def attach_session(
             return False
 
     if workspace_group is not None and shutil.which("hyprctl"):
-        workspace_id = middle_workspace_for_group(workspace_group)
+        workspace_id = workspace_id_for_group(workspace_group)
         subprocess.Popen(
             [
                 "hyprctl",

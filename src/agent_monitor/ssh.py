@@ -8,7 +8,8 @@ import shlex
 import shutil
 import subprocess
 
-from agent_monitor.zellij import middle_workspace_for_group, terminal_command
+from agent_monitor.workspace import workspace_id_for_group
+from agent_monitor.zellij import terminal_command
 
 
 class SshCommandError(RuntimeError):
@@ -72,7 +73,7 @@ def open_ssh_zellij_attach(
         return False
 
     if workspace_group is not None and shutil.which("hyprctl"):
-        workspace_id = middle_workspace_for_group(workspace_group)
+        workspace_id = workspace_id_for_group(workspace_group)
         subprocess.Popen(
             [
                 "hyprctl",

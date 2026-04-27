@@ -40,8 +40,7 @@ from agent_monitor.models import (
 SPINNER_FRAMES = list(BRAILLE_SPINNER_CHARS)  # [⠂, ⠐]
 from agent_monitor.registry import read_devtools_worktrees
 from agent_monitor.statusline import StatuslineWatcher
-from agent_monitor.workspace import focus_window, move_window_to_workspace, switch_to_group
-from agent_monitor.zellij import middle_workspace_for_group
+from agent_monitor.workspace import focus_window, move_window_to_workspace, switch_to_group, workspace_id_for_group
 
 logger = logging.getLogger(__name__)
 IDLE_RECENT_MS = 10 * 60 * 1000
@@ -827,13 +826,13 @@ class AgentMonitorApp(App):
 
         if existing_window:
             if target_group is not None:
-                move_window_to_workspace(existing_window["address"], middle_workspace_for_group(target_group))
+                move_window_to_workspace(existing_window["address"], workspace_id_for_group(target_group))
             await focus_window(existing_window["address"])
             return
 
         if live_session is not None:
             if target_group is not None:
-                move_window_to_workspace(live_session.address, middle_workspace_for_group(target_group))
+                move_window_to_workspace(live_session.address, workspace_id_for_group(target_group))
             await focus_window(live_session.address)
             return
 

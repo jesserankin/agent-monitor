@@ -255,8 +255,10 @@ def test_attach_session_launches_terminal():
 def test_attach_session_launches_terminal_on_middle_workspace():
     with patch("agent_monitor.zellij.terminal_attach_command", return_value=["ghostty", "-e", "zellij", "attach", "s"]), \
          patch("agent_monitor.zellij.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.zellij.workspace_id_for_group", return_value=11) as mock_workspace, \
          patch("agent_monitor.zellij.subprocess.Popen") as mock_popen:
         assert attach_session("s", workspace_group=1) is True
+        mock_workspace.assert_called_once_with(1)
         mock_popen.assert_called_once_with(
             [
                 "hyprctl",

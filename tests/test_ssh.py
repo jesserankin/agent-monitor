@@ -70,9 +70,11 @@ def test_open_ssh_zellij_attach_launches_terminal():
 def test_open_ssh_zellij_attach_launches_on_workspace_group():
     with patch("agent_monitor.ssh.terminal_command", return_value=["ghostty", "-e", "ssh", "-t", "host", "zellij", "attach", "s"]), \
          patch("agent_monitor.ssh.shutil.which", return_value="/usr/bin/hyprctl"), \
+         patch("agent_monitor.ssh.workspace_id_for_group", return_value=13) as mock_workspace, \
          patch("agent_monitor.ssh.subprocess.Popen") as mock_popen:
         assert open_ssh_zellij_attach("host", "s", workspace_group=3) is True
 
+    mock_workspace.assert_called_once_with(3)
     mock_popen.assert_called_once_with(
         [
             "hyprctl",
