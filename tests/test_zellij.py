@@ -240,9 +240,14 @@ def test_terminal_attach_command_returns_none_when_no_terminal():
 
 
 def test_attach_session_launches_terminal():
-    with patch("agent_monitor.zellij.terminal_attach_command", return_value=["ghostty", "-e", "zellij", "attach", "s"]), \
-         patch("agent_monitor.zellij.shutil.which", return_value=None), \
-         patch("agent_monitor.zellij.subprocess.Popen") as mock_popen:
+    with (
+        patch(
+            "agent_monitor.zellij.terminal_attach_command",
+            return_value=["ghostty", "-e", "zellij", "attach", "s"],
+        ),
+        patch("agent_monitor.zellij.shutil.which", return_value=None),
+        patch("agent_monitor.zellij.subprocess.Popen") as mock_popen,
+    ):
         assert attach_session("s") is True
         mock_popen.assert_called_once_with(
             ["ghostty", "-e", "zellij", "attach", "s"],
@@ -253,10 +258,15 @@ def test_attach_session_launches_terminal():
 
 
 def test_attach_session_launches_terminal_on_middle_workspace():
-    with patch("agent_monitor.zellij.terminal_attach_command", return_value=["ghostty", "-e", "zellij", "attach", "s"]), \
-         patch("agent_monitor.zellij.shutil.which", return_value="/usr/bin/hyprctl"), \
-         patch("agent_monitor.zellij.workspace_id_for_group", return_value=11) as mock_workspace, \
-         patch("agent_monitor.zellij.subprocess.Popen") as mock_popen:
+    with (
+        patch(
+            "agent_monitor.zellij.terminal_attach_command",
+            return_value=["ghostty", "-e", "zellij", "attach", "s"],
+        ),
+        patch("agent_monitor.zellij.shutil.which", return_value="/usr/bin/hyprctl"),
+        patch("agent_monitor.zellij.workspace_id_for_group", return_value=11) as mock_workspace,
+        patch("agent_monitor.zellij.subprocess.Popen") as mock_popen,
+    ):
         assert attach_session("s", workspace_group=1) is True
         mock_workspace.assert_called_once_with(1)
         mock_popen.assert_called_once_with(
@@ -273,17 +283,25 @@ def test_attach_session_launches_terminal_on_middle_workspace():
 
 
 def test_attach_session_creates_session_with_launch_command_then_attaches():
-    with patch("agent_monitor.zellij.create_session_with_command", return_value=True) as mock_create, \
-         patch("agent_monitor.zellij.terminal_attach_command", return_value=["ghostty", "-e", "zellij", "attach", "s"]) as mock_terminal, \
-         patch("agent_monitor.zellij.shutil.which", return_value=None), \
-         patch("agent_monitor.zellij.subprocess.Popen") as mock_popen:
-        assert attach_session(
-            "s",
-            create=True,
-            cwd="/repo/worktree",
-            launch_argv=["codex", "--cd", "/repo/worktree"],
-            pane_name="agent",
-        ) is True
+    with (
+        patch("agent_monitor.zellij.create_session_with_command", return_value=True) as mock_create,
+        patch(
+            "agent_monitor.zellij.terminal_attach_command",
+            return_value=["ghostty", "-e", "zellij", "attach", "s"],
+        ) as mock_terminal,
+        patch("agent_monitor.zellij.shutil.which", return_value=None),
+        patch("agent_monitor.zellij.subprocess.Popen") as mock_popen,
+    ):
+        assert (
+            attach_session(
+                "s",
+                create=True,
+                cwd="/repo/worktree",
+                launch_argv=["codex", "--cd", "/repo/worktree"],
+                pane_name="agent",
+            )
+            is True
+        )
 
         mock_create.assert_called_once_with(
             "s",
@@ -301,37 +319,53 @@ def test_attach_session_creates_session_with_launch_command_then_attaches():
 
 
 def test_attach_session_returns_false_when_launch_command_fails():
-    with patch("agent_monitor.zellij.create_session_with_command", return_value=False), \
-         patch("agent_monitor.zellij.terminal_attach_command", return_value=["ghostty", "-e", "zellij", "attach", "s"]) as mock_terminal:
-        assert attach_session(
-            "s",
-            create=True,
-            cwd="/repo/worktree",
-            launch_argv=["codex", "--cd", "/repo/worktree"],
-        ) is False
+    with (
+        patch("agent_monitor.zellij.create_session_with_command", return_value=False),
+        patch(
+            "agent_monitor.zellij.terminal_attach_command",
+            return_value=["ghostty", "-e", "zellij", "attach", "s"],
+        ) as mock_terminal,
+    ):
+        assert (
+            attach_session(
+                "s",
+                create=True,
+                cwd="/repo/worktree",
+                launch_argv=["codex", "--cd", "/repo/worktree"],
+            )
+            is False
+        )
         mock_terminal.assert_called_once_with("s", create=False, cwd="/repo/worktree")
 
 
 def test_attach_session_checks_terminal_before_launching_command():
-    with patch("agent_monitor.zellij.create_session_with_command") as mock_create, \
-         patch("agent_monitor.zellij.terminal_attach_command", return_value=None):
-        assert attach_session(
-            "s",
-            create=True,
-            cwd="/repo/worktree",
-            launch_argv=["codex", "--cd", "/repo/worktree"],
-        ) is False
+    with (
+        patch("agent_monitor.zellij.create_session_with_command") as mock_create,
+        patch("agent_monitor.zellij.terminal_attach_command", return_value=None),
+    ):
+        assert (
+            attach_session(
+                "s",
+                create=True,
+                cwd="/repo/worktree",
+                launch_argv=["codex", "--cd", "/repo/worktree"],
+            )
+            is False
+        )
         mock_create.assert_not_called()
 
 
 def test_create_session_with_command_runs_create_then_command():
     with patch("agent_monitor.zellij.subprocess.run") as mock_run:
-        assert create_session_with_command(
-            "s",
-            ["codex", "--cd", "/repo/worktree"],
-            cwd="/repo/worktree",
-            pane_name="agent",
-        ) is True
+        assert (
+            create_session_with_command(
+                "s",
+                ["codex", "--cd", "/repo/worktree"],
+                cwd="/repo/worktree",
+                pane_name="agent",
+            )
+            is True
+        )
 
     assert mock_run.call_count == 2
     assert mock_run.call_args_list[0].args[0] == [
@@ -360,16 +394,20 @@ def test_create_session_with_command_runs_create_then_command():
 
 
 def test_ensure_session_returns_true_when_session_exists():
-    with patch("agent_monitor.zellij.list_sessions", return_value=["s"]), \
-         patch("agent_monitor.zellij.subprocess.run") as mock_run:
+    with (
+        patch("agent_monitor.zellij.list_sessions", return_value=["s"]),
+        patch("agent_monitor.zellij.subprocess.run") as mock_run,
+    ):
         assert ensure_session("s") is True
 
     mock_run.assert_not_called()
 
 
 def test_ensure_session_creates_background_session_without_terminal_attach():
-    with patch("agent_monitor.zellij.list_sessions", return_value=[]), \
-         patch("agent_monitor.zellij.subprocess.run") as mock_run:
+    with (
+        patch("agent_monitor.zellij.list_sessions", return_value=[]),
+        patch("agent_monitor.zellij.subprocess.run") as mock_run,
+    ):
         assert ensure_session("s", cwd="/repo") is True
 
     mock_run.assert_called_once_with(
@@ -381,7 +419,9 @@ def test_ensure_session_creates_background_session_without_terminal_attach():
 
 
 def test_attach_session_returns_false_without_terminal():
-    with patch("agent_monitor.zellij.terminal_attach_command", return_value=None), \
-         patch("agent_monitor.zellij.subprocess.Popen") as mock_popen:
+    with (
+        patch("agent_monitor.zellij.terminal_attach_command", return_value=None),
+        patch("agent_monitor.zellij.subprocess.Popen") as mock_popen,
+    ):
         assert attach_session("s") is False
         mock_popen.assert_not_called()

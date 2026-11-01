@@ -96,7 +96,11 @@ def list_sessions() -> list[str]:
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return []
 
-    output = result.stdout.decode(errors="replace") if isinstance(result.stdout, bytes) else str(result.stdout)
+    output = (
+        result.stdout.decode(errors="replace")
+        if isinstance(result.stdout, bytes)
+        else str(result.stdout)
+    )
     return sorted({line.strip() for line in output.splitlines() if line.strip()})
 
 

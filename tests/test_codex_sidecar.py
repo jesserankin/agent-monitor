@@ -67,7 +67,9 @@ def test_run_codex_sidecar_writes_running_heartbeat_and_stopped(tmp_path):
     )
 
     assert return_code == 0
-    assert popen_calls == [(["codex", "--cd", "/repo/project/.worktrees/branch"], "/repo/project/.worktrees/branch")]
+    assert popen_calls == [
+        (["codex", "--cd", "/repo/project/.worktrees/branch"], "/repo/project/.worktrees/branch")
+    ]
     payload = json.loads(status_path.read_text())
     assert payload["run_id"] == "project::branch::main"
     assert payload["worktree_id"] == "project::branch"

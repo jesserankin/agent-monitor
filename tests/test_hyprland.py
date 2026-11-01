@@ -65,9 +65,7 @@ class TestParseEventLine:
         }
 
     def test_openwindow_title_with_commas(self):
-        event = parse_event_line(
-            "openwindow>>abc123,3,com.mitchellh.ghostty,title, with, commas"
-        )
+        event = parse_event_line("openwindow>>abc123,3,com.mitchellh.ghostty,title, with, commas")
         assert event == {
             "event": "openwindow",
             "address": "abc123",
@@ -161,22 +159,24 @@ class TestFetchClients:
 
     @pytest.mark.asyncio
     async def test_parses_clients(self):
-        clients_json = json.dumps([
-            {
-                "address": "0xabc123",
-                "title": "my-session | ⠐ Working on stuff",
-                "class": "com.mitchellh.ghostty",
-                "workspace": {"id": 3},
-                "pid": 1234,
-            },
-            {
-                "address": "0xdef456",
-                "title": "Firefox",
-                "class": "firefox",
-                "workspace": {"id": 1},
-                "pid": 5678,
-            },
-        ])
+        clients_json = json.dumps(
+            [
+                {
+                    "address": "0xabc123",
+                    "title": "my-session | ⠐ Working on stuff",
+                    "class": "com.mitchellh.ghostty",
+                    "workspace": {"id": 3},
+                    "pid": 1234,
+                },
+                {
+                    "address": "0xdef456",
+                    "title": "Firefox",
+                    "class": "firefox",
+                    "workspace": {"id": 1},
+                    "pid": 5678,
+                },
+            ]
+        )
         mock_proc = AsyncMock()
         mock_proc.communicate.return_value = (clients_json.encode(), b"")
         mock_proc.returncode = 0
@@ -276,12 +276,14 @@ class TestHyprlandMonitor:
 
     def test_handle_window_open_claude_session(self):
         monitor = self._make_monitor()
-        monitor._handle_window_open({
-            "address": "abc123",
-            "workspace_id": 3,
-            "window_class": "com.mitchellh.ghostty",
-            "title": "my-session | ⠐ Working on stuff",
-        })
+        monitor._handle_window_open(
+            {
+                "address": "abc123",
+                "workspace_id": 3,
+                "window_class": "com.mitchellh.ghostty",
+                "title": "my-session | ⠐ Working on stuff",
+            }
+        )
         assert "abc123" in monitor._window_meta
         assert monitor._window_meta["abc123"]["class"] == "com.mitchellh.ghostty"
         assert "abc123" in monitor.sessions
@@ -290,42 +292,52 @@ class TestHyprlandMonitor:
 
     def test_handle_window_open_non_claude(self):
         monitor = self._make_monitor()
-        monitor._handle_window_open({
-            "address": "abc123",
-            "workspace_id": 1,
-            "window_class": "firefox",
-            "title": "Mozilla Firefox",
-        })
+        monitor._handle_window_open(
+            {
+                "address": "abc123",
+                "workspace_id": 1,
+                "window_class": "firefox",
+                "title": "Mozilla Firefox",
+            }
+        )
         assert "abc123" in monitor._window_meta
         assert "abc123" not in monitor.sessions
 
     def test_handle_window_open_negative_workspace(self):
         """Negative workspace IDs (special workspaces) should be tracked in meta but not sessions."""
         monitor = self._make_monitor()
-        monitor._handle_window_open({
-            "address": "abc123",
-            "workspace_id": -1,
-            "window_class": "com.mitchellh.ghostty",
-            "title": "my-session | ⠐ Working",
-        })
+        monitor._handle_window_open(
+            {
+                "address": "abc123",
+                "workspace_id": -1,
+                "window_class": "com.mitchellh.ghostty",
+                "title": "my-session | ⠐ Working",
+            }
+        )
         assert "abc123" in monitor._window_meta
         assert "abc123" not in monitor.sessions
 
     def test_handle_window_open_workspace_group_zero(self):
         """Workspace IDs where group == 0 (10, 20, 30) should not create sessions."""
         monitor = self._make_monitor()
-        monitor._handle_window_open({
-            "address": "abc123",
-            "workspace_id": 10,
-            "window_class": "com.mitchellh.ghostty",
-            "title": "my-session | ⠐ Working",
-        })
+        monitor._handle_window_open(
+            {
+                "address": "abc123",
+                "workspace_id": 10,
+                "window_class": "com.mitchellh.ghostty",
+                "title": "my-session | ⠐ Working",
+            }
+        )
         assert "abc123" in monitor._window_meta
         assert "abc123" not in monitor.sessions
 
     def test_handle_window_close(self):
         monitor = self._make_monitor()
-        monitor._window_meta["abc123"] = {"class": "com.mitchellh.ghostty", "workspace_id": 3, "pid": None}
+        monitor._window_meta["abc123"] = {
+            "class": "com.mitchellh.ghostty",
+            "workspace_id": 3,
+            "pid": None,
+        }
         monitor.sessions["abc123"] = MagicMock()
         monitor._handle_window_close("abc123")
         assert "abc123" not in monitor._window_meta
@@ -523,11 +535,13 @@ class TestDispatchEventCallbacks:
         assert "abc123" in monitor.sessions
 
         # Title change to non-Claude should keep session (Zellij pane switch)
-        await monitor._dispatch_event({
-            "event": "windowtitlev2",
-            "address": "abc123",
-            "title": "jesse@office:~/projects",
-        })
+        await monitor._dispatch_event(
+            {
+                "event": "windowtitlev2",
+                "address": "abc123",
+                "title": "jesse@office:~/projects",
+            }
+        )
         assert "abc123" in monitor.sessions
         # Session still fires update since it still exists
         assert len(updated) == 1
@@ -548,10 +562,12 @@ class TestDispatchEventCallbacks:
             "pid": 5678,
         }
 
-        await monitor._dispatch_event({
-            "event": "closewindow",
-            "address": "abc123",
-        })
+        await monitor._dispatch_event(
+            {
+                "event": "closewindow",
+                "address": "abc123",
+            }
+        )
         assert removed == []
 
     @pytest.mark.asyncio
@@ -572,10 +588,12 @@ class TestDispatchEventCallbacks:
         monitor._handle_title_change("abc123", "my-session | ⠐ Working")
         assert "abc123" in monitor.sessions
 
-        await monitor._dispatch_event({
-            "event": "closewindow",
-            "address": "abc123",
-        })
+        await monitor._dispatch_event(
+            {
+                "event": "closewindow",
+                "address": "abc123",
+            }
+        )
         assert removed == ["abc123"]
 
     @pytest.mark.asyncio
@@ -589,13 +607,15 @@ class TestDispatchEventCallbacks:
         monitor = self._make_monitor()
         monitor.on_session_update = on_update
 
-        await monitor._dispatch_event({
-            "event": "openwindow",
-            "address": "abc123",
-            "workspace_id": 3,
-            "window_class": "com.mitchellh.ghostty",
-            "title": "my-session | ⠐ Working",
-        })
+        await monitor._dispatch_event(
+            {
+                "event": "openwindow",
+                "address": "abc123",
+                "workspace_id": 3,
+                "window_class": "com.mitchellh.ghostty",
+                "title": "my-session | ⠐ Working",
+            }
+        )
         assert len(updated) == 1
         assert updated[0].session_name == "my-session"
 
@@ -616,11 +636,13 @@ class TestDispatchEventCallbacks:
         }
         monitor._handle_title_change("abc123", "my-session | ⠐ Working")
 
-        await monitor._dispatch_event({
-            "event": "windowtitlev2",
-            "address": "abc123",
-            "title": "my-session | ✳ Claude Code",
-        })
+        await monitor._dispatch_event(
+            {
+                "event": "windowtitlev2",
+                "address": "abc123",
+                "title": "my-session | ✳ Claude Code",
+            }
+        )
         assert len(updated) == 1
         assert updated[0].state == AgentState.IDLE
 
@@ -718,10 +740,12 @@ class TestFocusTracking:
         }
         monitor._handle_title_change("abc123", "my-session | ⠐ Working")
 
-        await monitor._dispatch_event({
-            "event": "activewindowv2",
-            "address": "abc123",
-        })
+        await monitor._dispatch_event(
+            {
+                "event": "activewindowv2",
+                "address": "abc123",
+            }
+        )
         assert monitor.sessions["abc123"].is_focused is True
 
     @pytest.mark.asyncio
@@ -809,12 +833,14 @@ class TestResolveSessionCwds:
             "workspace_id": 3,
             "pid": None,
         }
-        monitor._handle_window_open({
-            "address": "abc123",
-            "workspace_id": 3,
-            "window_class": "com.mitchellh.ghostty",
-            "title": "my-session | ⠐ Working",
-        })
+        monitor._handle_window_open(
+            {
+                "address": "abc123",
+                "workspace_id": 3,
+                "window_class": "com.mitchellh.ghostty",
+                "title": "my-session | ⠐ Working",
+            }
+        )
         # openwindow sets pid=None
 
         mock_socket_map.return_value = {}

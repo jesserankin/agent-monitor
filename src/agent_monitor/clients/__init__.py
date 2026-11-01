@@ -1,2 +1,1 @@
 """Client-specific telemetry adapters."""
-

@@ -111,8 +111,7 @@ def get_event_socket_path() -> str:
             pass
 
     raise FileNotFoundError(
-        "Hyprland event socket not found. "
-        "Is Hyprland running? Check $HYPRLAND_INSTANCE_SIGNATURE."
+        "Hyprland event socket not found. Is Hyprland running? Check $HYPRLAND_INSTANCE_SIGNATURE."
     )
 
 
@@ -124,7 +123,9 @@ async def fetch_clients() -> list[dict]:
     proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            "hyprctl", "clients", "-j",
+            "hyprctl",
+            "clients",
+            "-j",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -179,7 +180,9 @@ async def fetch_active_window() -> str | None:
     proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            "hyprctl", "activewindow", "-j",
+            "hyprctl",
+            "activewindow",
+            "-j",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -334,7 +337,9 @@ class HyprlandMonitor:
             if active_addr in self.sessions:
                 self.sessions[active_addr].is_focused = True
 
-        self._log.info("Initial state: %d sessions from %d windows", len(self.sessions), len(self._window_meta))
+        self._log.info(
+            "Initial state: %d sessions from %d windows", len(self.sessions), len(self._window_meta)
+        )
 
         # Notify about all initial sessions
         if self.on_session_update:

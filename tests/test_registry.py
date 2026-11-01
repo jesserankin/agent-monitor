@@ -16,20 +16,24 @@ from agent_monitor.registry import (
 
 def test_read_devtools_worktrees(tmp_path):
     path = tmp_path / "instances.json"
-    path.write_text(json.dumps({
-        "instances": {
-            "game-engine-v2::combat-ui": {
-                "branch": "combat-ui",
-                "port": 4030,
-                "tidewave_port": 9860,
-                "mcp_name": "tidewave-game-engine-v2-combat-ui",
-                "worktree_path": ".worktrees/combat-ui",
-                "project_root": "/home/jesse/projects/game-engine-v2",
-                "containerized": True,
-                "created_at": "2026-04-19T00:00:00Z",
+    path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "game-engine-v2::combat-ui": {
+                        "branch": "combat-ui",
+                        "port": 4030,
+                        "tidewave_port": 9860,
+                        "mcp_name": "tidewave-game-engine-v2-combat-ui",
+                        "worktree_path": ".worktrees/combat-ui",
+                        "project_root": "/home/jesse/projects/game-engine-v2",
+                        "containerized": True,
+                        "created_at": "2026-04-19T00:00:00Z",
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
 
     worktrees = read_devtools_worktrees(path)
 
@@ -41,20 +45,24 @@ def test_read_devtools_worktrees(tmp_path):
 
 def test_read_overlay_agent_runs(tmp_path):
     path = tmp_path / "sessions.json"
-    path.write_text(json.dumps({
-        "agent_runs": {
-            "game-engine-v2::combat-ui::main": {
-                "worktree_id": "game-engine-v2::combat-ui",
-                "client": "codex",
-                "workspace_group": 3,
-                "zellij_session": "ge2-combat-ui",
-                "agent_pane": "agent",
-                "cwd": "/home/jesse/projects/game-engine-v2/.worktrees/combat-ui",
-                "client_ids": {"codex_thread_id": None},
-                "launch": {"argv": ["codex", "--cd", "/repo/.worktrees/combat-ui"]},
+    path.write_text(
+        json.dumps(
+            {
+                "agent_runs": {
+                    "game-engine-v2::combat-ui::main": {
+                        "worktree_id": "game-engine-v2::combat-ui",
+                        "client": "codex",
+                        "workspace_group": 3,
+                        "zellij_session": "ge2-combat-ui",
+                        "agent_pane": "agent",
+                        "cwd": "/home/jesse/projects/game-engine-v2/.worktrees/combat-ui",
+                        "client_ids": {"codex_thread_id": None},
+                        "launch": {"argv": ["codex", "--cd", "/repo/.worktrees/combat-ui"]},
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
 
     runs = read_overlay_agent_runs(path)
 
@@ -66,15 +74,19 @@ def test_read_overlay_agent_runs(tmp_path):
 
 def test_write_overlay_agent_runs_round_trip(tmp_path):
     source = tmp_path / "source.json"
-    source.write_text(json.dumps({
-        "agent_runs": {
-            "project::branch::main": {
-                "worktree_id": "project::branch",
-                "client": "claude",
-                "workspace_group": 7,
+    source.write_text(
+        json.dumps(
+            {
+                "agent_runs": {
+                    "project::branch::main": {
+                        "worktree_id": "project::branch",
+                        "client": "claude",
+                        "workspace_group": 7,
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
     destination = tmp_path / "agent-monitor" / "sessions.json"
 
     runs = read_overlay_agent_runs(source)
@@ -112,16 +124,20 @@ def test_set_overlay_workspace_group_upserts_run(tmp_path):
 
 def test_set_overlay_workspace_group_updates_existing_run(tmp_path):
     path = tmp_path / "sessions.json"
-    path.write_text(json.dumps({
-        "agent_runs": {
-            "project::branch::main": {
-                "worktree_id": "project::branch",
-                "client": "codex",
-                "workspace_group": 2,
-                "zellij_session": "project-branch",
+    path.write_text(
+        json.dumps(
+            {
+                "agent_runs": {
+                    "project::branch::main": {
+                        "worktree_id": "project::branch",
+                        "client": "codex",
+                        "workspace_group": 2,
+                        "zellij_session": "project-branch",
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
     run = read_overlay_agent_runs(path)[0]
 
     run.zellij_session = "fresh-session"
@@ -166,28 +182,36 @@ def test_build_host_snapshot_keeps_empty_worktrees_out_of_agent_runs(
 ):
     devtools_path = tmp_path / "instances.json"
     overlay_path = tmp_path / "sessions.json"
-    devtools_path.write_text(json.dumps({
-        "instances": {
-            "project::a": {
-                "branch": "a",
-                "worktree_path": ".worktrees/a",
-                "project_root": "/repo/project",
-            },
-            "project::b": {
-                "branch": "b",
-                "worktree_path": ".worktrees/b",
-                "project_root": "/repo/project",
-            },
-        }
-    }))
-    overlay_path.write_text(json.dumps({
-        "agent_runs": {
-            "project::a::main": {
-                "worktree_id": "project::a",
-                "client": "codex",
+    devtools_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::a": {
+                        "branch": "a",
+                        "worktree_path": ".worktrees/a",
+                        "project_root": "/repo/project",
+                    },
+                    "project::b": {
+                        "branch": "b",
+                        "worktree_path": ".worktrees/b",
+                        "project_root": "/repo/project",
+                    },
+                }
             }
-        }
-    }))
+        )
+    )
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "agent_runs": {
+                    "project::a::main": {
+                        "worktree_id": "project::a",
+                        "client": "codex",
+                    }
+                }
+            }
+        )
+    )
 
     snapshot = build_host_snapshot(
         devtools_registry_path=devtools_path,
@@ -212,15 +236,19 @@ def test_build_host_snapshot_can_still_include_legacy_stopped_runs(
 ):
     devtools_path = tmp_path / "instances.json"
     overlay_path = tmp_path / "sessions.json"
-    devtools_path.write_text(json.dumps({
-        "instances": {
-            "project::b": {
-                "branch": "b",
-                "worktree_path": ".worktrees/b",
-                "project_root": "/repo/project",
-            },
-        }
-    }))
+    devtools_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::b": {
+                        "branch": "b",
+                        "worktree_path": ".worktrees/b",
+                        "project_root": "/repo/project",
+                    },
+                }
+            }
+        )
+    )
     overlay_path.write_text(json.dumps({"agent_runs": {}}))
 
     snapshot = build_host_snapshot(
@@ -247,20 +275,24 @@ def test_build_host_snapshot_marks_matching_codex_worktree_running(
 ):
     devtools_path = tmp_path / "instances.json"
     overlay_path = tmp_path / "sessions.json"
-    devtools_path.write_text(json.dumps({
-        "instances": {
-            "project::a": {
-                "branch": "a",
-                "worktree_path": ".worktrees/a",
-                "project_root": "/repo/project",
-            },
-            "project::b": {
-                "branch": "b",
-                "worktree_path": ".worktrees/b",
-                "project_root": "/repo/project",
-            },
-        }
-    }))
+    devtools_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::a": {
+                        "branch": "a",
+                        "worktree_path": ".worktrees/a",
+                        "project_root": "/repo/project",
+                    },
+                    "project::b": {
+                        "branch": "b",
+                        "worktree_path": ".worktrees/b",
+                        "project_root": "/repo/project",
+                    },
+                }
+            }
+        )
+    )
     overlay_path.write_text(json.dumps({"agent_runs": {}}))
     mock_processes.return_value = [
         {
@@ -294,24 +326,32 @@ def test_build_host_snapshot_preserves_overlay_metadata_when_codex_running(
 ):
     devtools_path = tmp_path / "instances.json"
     overlay_path = tmp_path / "sessions.json"
-    devtools_path.write_text(json.dumps({
-        "instances": {
-            "project::a": {
-                "branch": "a",
-                "worktree_path": ".worktrees/a",
-                "project_root": "/repo/project",
+    devtools_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::a": {
+                        "branch": "a",
+                        "worktree_path": ".worktrees/a",
+                        "project_root": "/repo/project",
+                    }
+                }
             }
-        }
-    }))
-    overlay_path.write_text(json.dumps({
-        "agent_runs": {
-            "project::a::main": {
-                "worktree_id": "project::a",
-                "client": "codex",
-                "workspace_group": 4,
+        )
+    )
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "agent_runs": {
+                    "project::a::main": {
+                        "worktree_id": "project::a",
+                        "client": "codex",
+                        "workspace_group": 4,
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
     mock_processes.return_value = [
         {
             "pid": 123,
@@ -347,24 +387,32 @@ def test_build_host_snapshot_prefers_zellij_backed_codex_process_for_worktree(
 ):
     devtools_path = tmp_path / "instances.json"
     overlay_path = tmp_path / "sessions.json"
-    devtools_path.write_text(json.dumps({
-        "instances": {
-            "project::a": {
-                "branch": "a",
-                "worktree_path": ".worktrees/a",
-                "project_root": "/repo/project",
+    devtools_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::a": {
+                        "branch": "a",
+                        "worktree_path": ".worktrees/a",
+                        "project_root": "/repo/project",
+                    }
+                }
             }
-        }
-    }))
-    overlay_path.write_text(json.dumps({
-        "agent_runs": {
-            "project::a::main": {
-                "worktree_id": "project::a",
-                "client": "codex",
-                "zellij_session": "project-stale",
+        )
+    )
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "agent_runs": {
+                    "project::a::main": {
+                        "worktree_id": "project::a",
+                        "client": "codex",
+                        "zellij_session": "project-stale",
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
     mock_processes.return_value = [
         {
             "pid": 123,
@@ -402,34 +450,46 @@ def test_build_host_snapshot_drops_stale_live_zellij_session_from_sidecar_and_ov
     overlay_path = tmp_path / "sessions.json"
     sidecar_dir = tmp_path / "runs"
     sidecar_path = sidecar_dir / "project--a--main" / "status.json"
-    devtools_path.write_text(json.dumps({
-        "instances": {
-            "project::a": {
-                "branch": "a",
-                "worktree_path": ".worktrees/a",
-                "project_root": "/repo/project",
+    devtools_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::a": {
+                        "branch": "a",
+                        "worktree_path": ".worktrees/a",
+                        "project_root": "/repo/project",
+                    }
+                }
             }
-        }
-    }))
-    overlay_path.write_text(json.dumps({
-        "agent_runs": {
-            "project::a::main": {
+        )
+    )
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "agent_runs": {
+                    "project::a::main": {
+                        "worktree_id": "project::a",
+                        "client": "codex",
+                        "zellij_session": "project-stale",
+                    }
+                }
+            }
+        )
+    )
+    sidecar_path.parent.mkdir(parents=True)
+    sidecar_path.write_text(
+        json.dumps(
+            {
+                "run_id": "project::a::main",
                 "worktree_id": "project::a",
                 "client": "codex",
+                "status": "idle",
+                "cwd": "/repo/project/.worktrees/a",
                 "zellij_session": "project-stale",
+                "heartbeat_at_ms": 1777160883999,
             }
-        }
-    }))
-    sidecar_path.parent.mkdir(parents=True)
-    sidecar_path.write_text(json.dumps({
-        "run_id": "project::a::main",
-        "worktree_id": "project::a",
-        "client": "codex",
-        "status": "idle",
-        "cwd": "/repo/project/.worktrees/a",
-        "zellij_session": "project-stale",
-        "heartbeat_at_ms": 1777160883999,
-    }))
+        )
+    )
 
     snapshot = build_host_snapshot(
         devtools_registry_path=devtools_path,
@@ -454,37 +514,49 @@ def test_build_host_snapshot_sidecar_status_is_primary_for_codex_run(
     overlay_path = tmp_path / "sessions.json"
     sidecar_dir = tmp_path / "runs"
     sidecar_path = sidecar_dir / "project--a--main" / "status.json"
-    devtools_path.write_text(json.dumps({
-        "instances": {
-            "project::a": {
-                "branch": "a",
-                "worktree_path": ".worktrees/a",
-                "project_root": "/repo/project",
+    devtools_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::a": {
+                        "branch": "a",
+                        "worktree_path": ".worktrees/a",
+                        "project_root": "/repo/project",
+                    }
+                }
             }
-        }
-    }))
-    overlay_path.write_text(json.dumps({
-        "agent_runs": {
-            "project::a::main": {
+        )
+    )
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "agent_runs": {
+                    "project::a::main": {
+                        "worktree_id": "project::a",
+                        "client": "codex",
+                        "workspace_group": 5,
+                        "model": "gpt-5.5",
+                        "tokens_used": 9000,
+                    }
+                }
+            }
+        )
+    )
+    sidecar_path.parent.mkdir(parents=True)
+    sidecar_path.write_text(
+        json.dumps(
+            {
+                "run_id": "project::a::main",
                 "worktree_id": "project::a",
                 "client": "codex",
-                "workspace_group": 5,
-                "model": "gpt-5.5",
-                "tokens_used": 9000,
+                "status": "waiting_approval",
+                "cwd": "/repo/project/.worktrees/a",
+                "zellij_session": "project-a",
+                "title": "Waiting for approval",
+                "heartbeat_at_ms": 1777160883999,
             }
-        }
-    }))
-    sidecar_path.parent.mkdir(parents=True)
-    sidecar_path.write_text(json.dumps({
-        "run_id": "project::a::main",
-        "worktree_id": "project::a",
-        "client": "codex",
-        "status": "waiting_approval",
-        "cwd": "/repo/project/.worktrees/a",
-        "zellij_session": "project-a",
-        "title": "Waiting for approval",
-        "heartbeat_at_ms": 1777160883999,
-    }))
+        )
+    )
     mock_processes.return_value = [
         {
             "pid": 123,
@@ -523,25 +595,33 @@ def test_build_host_snapshot_stopped_sidecar_is_not_repromoted_by_process_discov
     overlay_path = tmp_path / "sessions.json"
     sidecar_dir = tmp_path / "runs"
     sidecar_path = sidecar_dir / "project--a--main" / "status.json"
-    devtools_path.write_text(json.dumps({
-        "instances": {
-            "project::a": {
-                "branch": "a",
-                "worktree_path": ".worktrees/a",
-                "project_root": "/repo/project",
+    devtools_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::a": {
+                        "branch": "a",
+                        "worktree_path": ".worktrees/a",
+                        "project_root": "/repo/project",
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
     overlay_path.write_text(json.dumps({"agent_runs": {}}))
     sidecar_path.parent.mkdir(parents=True)
-    sidecar_path.write_text(json.dumps({
-        "run_id": "project::a::main",
-        "worktree_id": "project::a",
-        "client": "codex",
-        "status": "stopped",
-        "cwd": "/repo/project/.worktrees/a",
-        "heartbeat_at_ms": 1777160883999,
-    }))
+    sidecar_path.write_text(
+        json.dumps(
+            {
+                "run_id": "project::a::main",
+                "worktree_id": "project::a",
+                "client": "codex",
+                "status": "stopped",
+                "cwd": "/repo/project/.worktrees/a",
+                "heartbeat_at_ms": 1777160883999,
+            }
+        )
+    )
     mock_processes.return_value = [
         {
             "pid": 123,
@@ -575,24 +655,32 @@ def test_build_host_snapshot_marks_overlay_run_running_when_zellij_session_exist
     devtools_path = tmp_path / "instances.json"
     overlay_path = tmp_path / "sessions.json"
     sidecar_dir = tmp_path / "runs"
-    devtools_path.write_text(json.dumps({
-        "instances": {
-            "project::a": {
-                "branch": "a",
-                "worktree_path": ".worktrees/a",
-                "project_root": "/repo/project",
+    devtools_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::a": {
+                        "branch": "a",
+                        "worktree_path": ".worktrees/a",
+                        "project_root": "/repo/project",
+                    }
+                }
             }
-        }
-    }))
-    overlay_path.write_text(json.dumps({
-        "agent_runs": {
-            "project::a::main": {
-                "worktree_id": "project::a",
-                "client": "codex",
-                "zellij_session": "project-a",
+        )
+    )
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "agent_runs": {
+                    "project::a::main": {
+                        "worktree_id": "project::a",
+                        "client": "codex",
+                        "zellij_session": "project-a",
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
 
     snapshot = build_host_snapshot(
         devtools_registry_path=devtools_path,
@@ -618,15 +706,19 @@ def test_build_host_snapshot_adds_default_run_for_matching_zellij_session(
     devtools_path = tmp_path / "instances.json"
     overlay_path = tmp_path / "sessions.json"
     sidecar_dir = tmp_path / "runs"
-    devtools_path.write_text(json.dumps({
-        "instances": {
-            "project::a": {
-                "branch": "a",
-                "worktree_path": ".worktrees/a",
-                "project_root": "/repo/project",
+    devtools_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::a": {
+                        "branch": "a",
+                        "worktree_path": ".worktrees/a",
+                        "project_root": "/repo/project",
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
     overlay_path.write_text(json.dumps({"agent_runs": {}}))
 
     snapshot = build_host_snapshot(
@@ -658,25 +750,33 @@ def test_build_host_snapshot_does_not_repromote_stopped_sidecar_from_zellij(
     overlay_path = tmp_path / "sessions.json"
     sidecar_dir = tmp_path / "runs"
     status_path = sidecar_dir / "project--a--main" / "status.json"
-    devtools_path.write_text(json.dumps({
-        "instances": {
-            "project::a": {
-                "branch": "a",
-                "worktree_path": ".worktrees/a",
-                "project_root": "/repo/project",
+    devtools_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::a": {
+                        "branch": "a",
+                        "worktree_path": ".worktrees/a",
+                        "project_root": "/repo/project",
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
     overlay_path.write_text(json.dumps({"agent_runs": {}}))
     status_path.parent.mkdir(parents=True)
-    status_path.write_text(json.dumps({
-        "run_id": "project::a::main",
-        "worktree_id": "project::a",
-        "client": "codex",
-        "status": "stopped",
-        "zellij_session": "project-a",
-        "heartbeat_at_ms": 1777160883999,
-    }))
+    status_path.write_text(
+        json.dumps(
+            {
+                "run_id": "project::a::main",
+                "worktree_id": "project::a",
+                "client": "codex",
+                "status": "stopped",
+                "zellij_session": "project-a",
+                "heartbeat_at_ms": 1777160883999,
+            }
+        )
+    )
 
     snapshot = build_host_snapshot(
         devtools_registry_path=devtools_path,
@@ -700,13 +800,17 @@ def test_build_host_snapshot_adds_sidecar_only_run(
     sidecar_dir = tmp_path / "runs"
     status_path = sidecar_dir / "project--a--review" / "status.json"
     status_path.parent.mkdir(parents=True)
-    status_path.write_text(json.dumps({
-        "run_id": "project::a::review",
-        "worktree_id": "project::a",
-        "client": "codex",
-        "status": "idle",
-        "cwd": "/repo/project/.worktrees/a",
-    }))
+    status_path.write_text(
+        json.dumps(
+            {
+                "run_id": "project::a::review",
+                "worktree_id": "project::a",
+                "client": "codex",
+                "status": "idle",
+                "cwd": "/repo/project/.worktrees/a",
+            }
+        )
+    )
 
     snapshot = build_host_snapshot(
         devtools_registry_path=tmp_path / "missing-instances.json",
@@ -731,39 +835,51 @@ def test_build_host_snapshot_preserves_multiple_codex_sidecars_in_same_worktree(
     devtools_path = tmp_path / "instances.json"
     overlay_path = tmp_path / "sessions.json"
     sidecar_dir = tmp_path / "runs"
-    devtools_path.write_text(json.dumps({
-        "instances": {
-            "project::a": {
-                "branch": "a",
-                "worktree_path": ".worktrees/a",
-                "project_root": "/repo/project",
+    devtools_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::a": {
+                        "branch": "a",
+                        "worktree_path": ".worktrees/a",
+                        "project_root": "/repo/project",
+                    }
+                }
             }
-        }
-    }))
-    overlay_path.write_text(json.dumps({
-        "agent_runs": {
-            "project::a::main": {
-                "worktree_id": "project::a",
-                "client": "codex",
-                "workspace_group": 3,
+        )
+    )
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "agent_runs": {
+                    "project::a::main": {
+                        "worktree_id": "project::a",
+                        "client": "codex",
+                        "workspace_group": 3,
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
     for run_id, thread_id, title in [
         ("project::a::main", "thread-main", "Main task"),
         ("project::a::review", "thread-review", "Review task"),
     ]:
         status_path = sidecar_dir / run_id.replace("::", "--") / "status.json"
         status_path.parent.mkdir(parents=True)
-        status_path.write_text(json.dumps({
-            "run_id": run_id,
-            "worktree_id": "project::a",
-            "client": "codex",
-            "status": "idle",
-            "cwd": "/repo/project/.worktrees/a",
-            "thread_id": thread_id,
-            "title": title,
-        }))
+        status_path.write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "worktree_id": "project::a",
+                    "client": "codex",
+                    "status": "idle",
+                    "cwd": "/repo/project/.worktrees/a",
+                    "thread_id": thread_id,
+                    "title": title,
+                }
+            )
+        )
 
     snapshot = build_host_snapshot(
         devtools_registry_path=devtools_path,
@@ -792,14 +908,18 @@ def test_build_host_snapshot_prunes_stopped_ephemeral_sidecar(
     sidecar_dir = tmp_path / "runs"
     status_path = sidecar_dir / "agent-monitor--manual--main" / "status.json"
     status_path.parent.mkdir(parents=True)
-    status_path.write_text(json.dumps({
-        "run_id": "agent-monitor::manual::main",
-        "worktree_id": "agent-monitor::manual",
-        "client": "codex",
-        "status": "stopped",
-        "cwd": "/repo/agent-monitor",
-        "heartbeat_at_ms": 1000,
-    }))
+    status_path.write_text(
+        json.dumps(
+            {
+                "run_id": "agent-monitor::manual::main",
+                "worktree_id": "agent-monitor::manual",
+                "client": "codex",
+                "status": "stopped",
+                "cwd": "/repo/agent-monitor",
+                "heartbeat_at_ms": 1000,
+            }
+        )
+    )
 
     snapshot = build_host_snapshot(
         devtools_registry_path=tmp_path / "missing-instances.json",

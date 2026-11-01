@@ -22,8 +22,18 @@ from agent_monitor.registry import (
     set_overlay_zellij_session,
 )
 from agent_monitor.ssh import SshCommandError, SshTransport, open_ssh_zellij_attach
-from agent_monitor.workspace import focus_window_sync, move_window_to_workspace, switch_to_group_sync, workspace_id_for_group
-from agent_monitor.zellij import attach_session, ensure_session, list_sessions, session_name_for_run_id
+from agent_monitor.workspace import (
+    focus_window_sync,
+    move_window_to_workspace,
+    switch_to_group_sync,
+    workspace_id_for_group,
+)
+from agent_monitor.zellij import (
+    attach_session,
+    ensure_session,
+    list_sessions,
+    session_name_for_run_id,
+)
 
 
 class HostAdapter(Protocol):
@@ -368,15 +378,17 @@ def _devcontainer_codex_argv(worktree: Worktree, cwd: str) -> list[str]:
     if not worktree.project_root:
         return ["codex", "--cd", cwd]
     container_cwd = _container_path_for(worktree, cwd)
-    shell_command = " ".join([
-        "cd",
-        shlex.quote(container_cwd),
-        "&&",
-        "exec",
-        "codex",
-        "--cd",
-        shlex.quote(container_cwd),
-    ])
+    shell_command = " ".join(
+        [
+            "cd",
+            shlex.quote(container_cwd),
+            "&&",
+            "exec",
+            "codex",
+            "--cd",
+            shlex.quote(container_cwd),
+        ]
+    )
     return [
         "devcontainer",
         "exec",

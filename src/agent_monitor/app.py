@@ -40,7 +40,12 @@ from agent_monitor.models import (
 SPINNER_FRAMES = list(BRAILLE_SPINNER_CHARS)  # [⠂, ⠐]
 from agent_monitor.registry import read_devtools_worktrees
 from agent_monitor.statusline import StatuslineWatcher
-from agent_monitor.workspace import focus_window, move_window_to_workspace, switch_to_group, workspace_id_for_group
+from agent_monitor.workspace import (
+    focus_window,
+    move_window_to_workspace,
+    switch_to_group,
+    workspace_id_for_group,
+)
 
 logger = logging.getLogger(__name__)
 IDLE_RECENT_MS = 10 * 60 * 1000
@@ -354,8 +359,15 @@ class AgentMonitorApp(App):
 
     def _start_monitor(self) -> None:
         """Start the Hyprland event monitor and statusline watcher as background workers."""
-        self.run_worker(self._run_monitor(), exclusive=True, group="hyprland", name="hyprland-monitor")
-        self.run_worker(self._run_statusline_watcher(), exclusive=True, group="statusline", name="statusline-watcher")
+        self.run_worker(
+            self._run_monitor(), exclusive=True, group="hyprland", name="hyprland-monitor"
+        )
+        self.run_worker(
+            self._run_statusline_watcher(),
+            exclusive=True,
+            group="statusline",
+            name="statusline-watcher",
+        )
 
     async def _run_monitor(self) -> None:
         """Worker coroutine: create HyprlandMonitor and listen for events."""
@@ -559,7 +571,9 @@ class AgentMonitorApp(App):
             row_style = "dim"
         elif run.status == AgentStatus.IDLE and _is_recent_idle(run.telemetry):
             row_style = "dark_orange"
-        ws = Text(str(run.workspace_group) if run.workspace_group is not None else "", style=row_style)
+        ws = Text(
+            str(run.workspace_group) if run.workspace_group is not None else "", style=row_style
+        )
         repo = Text(_truncate(_repo_label(project, branch), 48), style=row_style)
         context = (
             _render_context_bar(run.telemetry.context_used_pct)
@@ -615,7 +629,11 @@ class AgentMonitorApp(App):
             name_style = "" if not session.is_focused else "bold"
             name = Text(f"{focus_prefix}{session.session_name}", style=name_style)
 
-        context = _render_context_bar(session.context_used_pct) if session.context_used_pct is not None else Text("")
+        context = (
+            _render_context_bar(session.context_used_pct)
+            if session.context_used_pct is not None
+            else Text("")
+        )
         if session.active_since is not None:
             elapsed_ms = int((time.monotonic() - session.active_since) * 1000)
             duration = Text(_render_duration(elapsed_ms))
@@ -630,7 +648,9 @@ class AgentMonitorApp(App):
             duration,
         )
 
-    def _render_status(self, status: AgentStatus, *, telemetry: ClientTelemetry | None = None) -> Text:
+    def _render_status(
+        self, status: AgentStatus, *, telemetry: ClientTelemetry | None = None
+    ) -> Text:
         if status == AgentStatus.STOPPED:
             return Text("S", style="dim")
         if status == AgentStatus.ACTIVE:
@@ -673,7 +693,13 @@ class AgentMonitorApp(App):
             rows.append((row_key, self._render_run_row(snapshot, run), _run_sort_key(run)))
 
         for row_key, worktree in self._worktree_rows.items():
-            rows.append((row_key, self._render_worktree_row(snapshot, worktree), _worktree_sort_key(worktree)))
+            rows.append(
+                (
+                    row_key,
+                    self._render_worktree_row(snapshot, worktree),
+                    _worktree_sort_key(worktree),
+                )
+            )
 
         rows.sort(key=lambda item: item[2])
         table.clear(columns=False)
@@ -694,9 +720,8 @@ class AgentMonitorApp(App):
         active = sum(1 for s in sessions if s.state == AgentState.ACTIVE)
         attention = sum(1 for s in sessions if s.state == AgentState.ATTENTION)
         idle = sum(1 for s in sessions if s.state == AgentState.IDLE)
-        stopped = (
-            sum(1 for run in snapshot_runs if run.status == AgentStatus.STOPPED)
-            + len(self._worktree_rows)
+        stopped = sum(1 for run in snapshot_runs if run.status == AgentStatus.STOPPED) + len(
+            self._worktree_rows
         )
         running = sum(1 for run in snapshot_runs if run.status == AgentStatus.RUNNING)
 
@@ -726,7 +751,9 @@ class AgentMonitorApp(App):
         if run is None:
             self.notify("Select a registered run to assign a workspace group", severity="warning")
             return
-        self.push_screen(WorkspaceGroupScreen(), callback=lambda group: self._handle_group_assignment(run, group))
+        self.push_screen(
+            WorkspaceGroupScreen(), callback=lambda group: self._handle_group_assignment(run, group)
+        )
 
     def _handle_group_assignment(self, run: AgentRun, workspace_group: int | None) -> None:
         if workspace_group is None:
@@ -780,7 +807,9 @@ class AgentMonitorApp(App):
             return
 
         if session is not None and not self._workspace_group_available:
-            self.notify("workspace-group not found — workspace switching disabled", severity="warning")
+            self.notify(
+                "workspace-group not found — workspace switching disabled", severity="warning"
+            )
             return
 
         if session is not None:
@@ -822,11 +851,16 @@ class AgentMonitorApp(App):
                 await switch_to_group(target_group)
                 await asyncio.sleep(0.1)
             else:
-                self.notify("workspace-group not found — opening session without workspace switch", severity="warning")
+                self.notify(
+                    "workspace-group not found — opening session without workspace switch",
+                    severity="warning",
+                )
 
         if existing_window:
             if target_group is not None:
-                move_window_to_workspace(existing_window["address"], workspace_id_for_group(target_group))
+                move_window_to_workspace(
+                    existing_window["address"], workspace_id_for_group(target_group)
+                )
             await focus_window(existing_window["address"])
             return
 
@@ -887,7 +921,9 @@ def main(argv: list[str] | None = None):
         parser.add_argument("--json", action="store_true", help="print the snapshot as JSON")
         parser.add_argument("--devtools-registry", help="path to dev-tools instances.json")
         parser.add_argument("--overlay", help="path to agent-monitor sessions.json")
-        parser.add_argument("--sidecar-runs-dir", help="path to agent-monitor sidecar runs directory")
+        parser.add_argument(
+            "--sidecar-runs-dir", help="path to agent-monitor sidecar runs directory"
+        )
         args = parser.parse_args(argv[1:])
         snapshot = LocalHostAdapter(
             devtools_registry_path=args.devtools_registry,
@@ -904,17 +940,25 @@ def main(argv: list[str] | None = None):
         parser = argparse.ArgumentParser(prog="agent-monitor open-run")
         parser.add_argument("target", help="agent run id or dev-tools worktree id")
         parser.add_argument("--json", action="store_true", help="print a JSON response")
-        parser.add_argument("--no-attach", action="store_true", help="ensure the zellij session exists without opening a terminal")
+        parser.add_argument(
+            "--no-attach",
+            action="store_true",
+            help="ensure the zellij session exists without opening a terminal",
+        )
         parser.add_argument("--devtools-registry", help="path to dev-tools instances.json")
         parser.add_argument("--overlay", help="path to agent-monitor sessions.json")
-        parser.add_argument("--sidecar-runs-dir", help="path to agent-monitor sidecar runs directory")
+        parser.add_argument(
+            "--sidecar-runs-dir", help="path to agent-monitor sidecar runs directory"
+        )
         args = parser.parse_args(argv[1:])
         adapter = LocalHostAdapter(
             devtools_registry_path=args.devtools_registry,
             overlay_path=args.overlay,
             sidecar_runs_dir=args.sidecar_runs_dir,
         )
-        _handle_open_run_command(adapter, args.target, json_output=args.json, attach=not args.no_attach)
+        _handle_open_run_command(
+            adapter, args.target, json_output=args.json, attach=not args.no_attach
+        )
         return
 
     if argv and argv[0] == "set-group":
@@ -924,7 +968,9 @@ def main(argv: list[str] | None = None):
         parser.add_argument("--json", action="store_true", help="print a JSON response")
         parser.add_argument("--devtools-registry", help="path to dev-tools instances.json")
         parser.add_argument("--overlay", help="path to agent-monitor sessions.json")
-        parser.add_argument("--sidecar-runs-dir", help="path to agent-monitor sidecar runs directory")
+        parser.add_argument(
+            "--sidecar-runs-dir", help="path to agent-monitor sidecar runs directory"
+        )
         args = parser.parse_args(argv[1:])
         adapter = LocalHostAdapter(
             devtools_registry_path=args.devtools_registry,
@@ -936,15 +982,27 @@ def main(argv: list[str] | None = None):
 
     if argv and argv[0] == "codex":
         parser = argparse.ArgumentParser(prog="agent-monitor codex")
-        parser.add_argument("--run-id", help="agent-monitor run id; defaults to <worktree-id>::<run-name>")
-        parser.add_argument("--run-name", default="main", help="run name suffix when --run-id is not provided")
-        parser.add_argument("--worktree-id", help="dev-tools worktree id; inferred from cwd when omitted")
+        parser.add_argument(
+            "--run-id", help="agent-monitor run id; defaults to <worktree-id>::<run-name>"
+        )
+        parser.add_argument(
+            "--run-name", default="main", help="run name suffix when --run-id is not provided"
+        )
+        parser.add_argument(
+            "--worktree-id", help="dev-tools worktree id; inferred from cwd when omitted"
+        )
         parser.add_argument("--cwd", help="worktree cwd; defaults to current directory")
-        parser.add_argument("--zellij-session", help="zellij session name; defaults to $ZELLIJ_SESSION_NAME")
+        parser.add_argument(
+            "--zellij-session", help="zellij session name; defaults to $ZELLIJ_SESSION_NAME"
+        )
         parser.add_argument("--codex-thread-id")
-        parser.add_argument("--keep-status", action="store_true", help="keep stopped sidecar status on clean exit")
+        parser.add_argument(
+            "--keep-status", action="store_true", help="keep stopped sidecar status on clean exit"
+        )
         parser.add_argument("--devtools-registry", help="path to dev-tools instances.json")
-        parser.add_argument("--sidecar-runs-dir", help="path to agent-monitor sidecar runs directory")
+        parser.add_argument(
+            "--sidecar-runs-dir", help="path to agent-monitor sidecar runs directory"
+        )
         parser.add_argument("--status-path")
         parser.add_argument("--heartbeat-interval", type=float, default=5.0)
         parser.add_argument("codex_args", nargs=argparse.REMAINDER)
@@ -998,7 +1056,12 @@ def _handle_open_run_command(
     run, resolved_as = _resolve_run_or_worktree(snapshot, target)
     if run is None:
         _finish_cli_response(
-            _error_payload("not_found", f"run or worktree not found: {target}", command="open-run", target=target),
+            _error_payload(
+                "not_found",
+                f"run or worktree not found: {target}",
+                command="open-run",
+                target=target,
+            ),
             json_output=json_output,
             exit_code=1,
         )
@@ -1012,7 +1075,9 @@ def _handle_open_run_command(
         opened = opened_run is not None
     if not opened:
         _finish_cli_response(
-            _error_payload("open_failed", f"failed to open run: {run.id}", command="open-run", target=target),
+            _error_payload(
+                "open_failed", f"failed to open run: {run.id}", command="open-run", target=target
+            ),
             json_output=json_output,
             exit_code=1,
         )
@@ -1043,7 +1108,12 @@ def _handle_set_group_command(
     run, resolved_as = _resolve_run_or_worktree(snapshot, target)
     if run is None:
         _finish_cli_response(
-            _error_payload("not_found", f"run or worktree not found: {target}", command="set-group", target=target),
+            _error_payload(
+                "not_found",
+                f"run or worktree not found: {target}",
+                command="set-group",
+                target=target,
+            ),
             json_output=json_output,
             exit_code=1,
         )
@@ -1117,7 +1187,9 @@ def _handle_codex_command(args: argparse.Namespace, parser: argparse.ArgumentPar
     )
 
 
-def _resolve_run_or_worktree(snapshot: HostSnapshot, target: str) -> tuple[AgentRun | None, str | None]:
+def _resolve_run_or_worktree(
+    snapshot: HostSnapshot, target: str
+) -> tuple[AgentRun | None, str | None]:
     run = _resolve_exact_run(snapshot, target)
     if run is not None:
         return run, "run"
@@ -1156,11 +1228,14 @@ def _find_worktree_for_cwd(cwd: str, worktrees: list[Worktree]) -> Worktree | No
     matches = [
         worktree
         for worktree in worktrees
-        if worktree.path and _path_is_inside(cwd_path, os.path.realpath(os.path.expanduser(worktree.path)))
+        if worktree.path
+        and _path_is_inside(cwd_path, os.path.realpath(os.path.expanduser(worktree.path)))
     ]
     if not matches:
         return None
-    return max(matches, key=lambda worktree: len(os.path.realpath(os.path.expanduser(worktree.path))))
+    return max(
+        matches, key=lambda worktree: len(os.path.realpath(os.path.expanduser(worktree.path)))
+    )
 
 
 def _path_is_inside(path: str, parent: str) -> bool:
@@ -1180,7 +1255,9 @@ def _finish_cli_response(payload: dict, *, json_output: bool, exit_code: int = 0
         run = payload.get("run") if isinstance(payload.get("run"), dict) else {}
         print(f"{payload['command']} ok: {run.get('id', payload.get('target', ''))}")
     else:
-        print(payload.get("error", {}).get("message", "agent-monitor command failed"), file=sys.stderr)
+        print(
+            payload.get("error", {}).get("message", "agent-monitor command failed"), file=sys.stderr
+        )
     if exit_code:
         raise SystemExit(exit_code)
 

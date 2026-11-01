@@ -11,7 +11,15 @@ from pathlib import Path
 from typing import Any
 
 from agent_monitor.hyprland import get_event_socket_path
-from agent_monitor.models import AgentRun, AgentStatus, ClientName, ClientTelemetry, HostInfo, HostSnapshot, Worktree
+from agent_monitor.models import (
+    AgentRun,
+    AgentStatus,
+    ClientName,
+    ClientTelemetry,
+    HostInfo,
+    HostSnapshot,
+    Worktree,
+)
 from agent_monitor.procfs import find_codex_processes
 from agent_monitor.sidecar import prune_ephemeral_sidecar_statuses, read_sidecar_agent_runs
 from agent_monitor.zellij import list_sessions as list_zellij_sessions, session_name_for_run_id
@@ -71,8 +79,7 @@ def write_overlay_agent_runs(
 
     payload = {
         "agent_runs": {
-            run.id: _overlay_run_payload(run)
-            for run in sorted(runs, key=lambda item: item.id)
+            run.id: _overlay_run_payload(run) for run in sorted(runs, key=lambda item: item.id)
         }
     }
     tmp_path = overlay_path.with_name(f".{overlay_path.name}.tmp")
@@ -126,7 +133,9 @@ def set_overlay_zellij_session(
             runs[index] = replace(
                 existing,
                 client=run.client,
-                workspace_group=run.workspace_group if run.workspace_group is not None else existing.workspace_group,
+                workspace_group=run.workspace_group
+                if run.workspace_group is not None
+                else existing.workspace_group,
                 zellij_session=zellij_session,
                 agent_pane=run.agent_pane or existing.agent_pane,
                 cwd=run.cwd or existing.cwd,
@@ -226,7 +235,11 @@ def _merge_sidecar_runs(
 
         run.client = sidecar_run.client
         run.status = sidecar_run.status
-        run.workspace_group = sidecar_run.workspace_group if sidecar_run.workspace_group is not None else run.workspace_group
+        run.workspace_group = (
+            sidecar_run.workspace_group
+            if sidecar_run.workspace_group is not None
+            else run.workspace_group
+        )
         run.zellij_session = sidecar_zellij_session or run.zellij_session
         run.agent_pane = sidecar_run.agent_pane or run.agent_pane
         run.cwd = sidecar_run.cwd or run.cwd
@@ -276,7 +289,9 @@ def _merge_zellij_sessions(
     for run in merged:
         if run.zellij_session not in active_sessions:
             continue
-        if run.status in {AgentStatus.STOPPED, AgentStatus.UNKNOWN} and not _has_sidecar_telemetry(run):
+        if run.status in {AgentStatus.STOPPED, AgentStatus.UNKNOWN} and not _has_sidecar_telemetry(
+            run
+        ):
             run.status = AgentStatus.RUNNING
 
     run_worktree_ids = {run.worktree_id for run in merged}
@@ -315,7 +330,10 @@ def _find_run_for_sidecar(
         worktree = _find_worktree_for_cwd(worktrees, sidecar_run.cwd)
         if worktree is not None:
             for run in runs:
-                if run.worktree_id == worktree.id and run.client in {sidecar_run.client, ClientName.UNKNOWN}:
+                if run.worktree_id == worktree.id and run.client in {
+                    sidecar_run.client,
+                    ClientName.UNKNOWN,
+                }:
                     return run
     return None
 
@@ -333,11 +351,21 @@ def _merge_telemetry(existing: ClientTelemetry, incoming: ClientTelemetry) -> Cl
     return ClientTelemetry(
         title=incoming.title or existing.title,
         model=incoming.model or existing.model,
-        tokens_used=incoming.tokens_used if incoming.tokens_used is not None else existing.tokens_used,
-        updated_at_ms=incoming.updated_at_ms if incoming.updated_at_ms is not None else existing.updated_at_ms,
-        active_since_ms=incoming.active_since_ms if incoming.active_since_ms is not None else existing.active_since_ms,
-        heartbeat_at_ms=incoming.heartbeat_at_ms if incoming.heartbeat_at_ms is not None else existing.heartbeat_at_ms,
-        context_used_pct=incoming.context_used_pct if incoming.context_used_pct is not None else existing.context_used_pct,
+        tokens_used=incoming.tokens_used
+        if incoming.tokens_used is not None
+        else existing.tokens_used,
+        updated_at_ms=incoming.updated_at_ms
+        if incoming.updated_at_ms is not None
+        else existing.updated_at_ms,
+        active_since_ms=incoming.active_since_ms
+        if incoming.active_since_ms is not None
+        else existing.active_since_ms,
+        heartbeat_at_ms=incoming.heartbeat_at_ms
+        if incoming.heartbeat_at_ms is not None
+        else existing.heartbeat_at_ms,
+        context_used_pct=incoming.context_used_pct
+        if incoming.context_used_pct is not None
+        else existing.context_used_pct,
         cost_usd=incoming.cost_usd if incoming.cost_usd is not None else existing.cost_usd,
     )
 
@@ -351,7 +379,9 @@ def _merge_codex_processes(
 ) -> list[AgentRun]:
     merged = list(runs)
     active_zellij_sessions = active_zellij_sessions or set()
-    for worktree, process in _best_codex_processes_by_worktree(worktrees, processes, active_zellij_sessions):
+    for worktree, process in _best_codex_processes_by_worktree(
+        worktrees, processes, active_zellij_sessions
+    ):
         cwd = process.get("cwd")
         run = _find_codex_run_for_worktree(merged, worktree)
         if run is None:
@@ -363,7 +393,10 @@ def _merge_codex_processes(
             merged.append(run)
 
         run.client = ClientName.CODEX
-        if run.status in {AgentStatus.STOPPED, AgentStatus.UNKNOWN} and run.telemetry.heartbeat_at_ms is None:
+        if (
+            run.status in {AgentStatus.STOPPED, AgentStatus.UNKNOWN}
+            and run.telemetry.heartbeat_at_ms is None
+        ):
             run.status = AgentStatus.RUNNING
         run.cwd = cwd
         zellij_session = process.get("zellij_session_name")

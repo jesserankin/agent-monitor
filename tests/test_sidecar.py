@@ -58,7 +58,9 @@ class TestSidecarValidPayload:
         assert result.returncode == 0, f"stderr: {result.stderr}"
         # File should be named by CWD basename, not ZELLIJ_SESSION_NAME
         json_file = monitor_dir / "my-project.json"
-        assert json_file.exists(), f"Expected {json_file} to exist. Dir contents: {list(monitor_dir.iterdir()) if monitor_dir.exists() else 'dir missing'}"
+        assert json_file.exists(), (
+            f"Expected {json_file} to exist. Dir contents: {list(monitor_dir.iterdir()) if monitor_dir.exists() else 'dir missing'}"
+        )
 
         written = json.loads(json_file.read_text())
         assert written == SAMPLE_INPUT
@@ -149,7 +151,9 @@ class TestSidecarIdentityFallback:
 
         monitor_dir = tmp_path / "claude-monitor"
         json_files = list(monitor_dir.glob("unknown-*.json"))
-        assert len(json_files) == 1, f"Expected one unknown-* file, got: {list(monitor_dir.iterdir())}"
+        assert len(json_files) == 1, (
+            f"Expected one unknown-* file, got: {list(monitor_dir.iterdir())}"
+        )
 
     def test_sanitizes_identifier(self, tmp_path):
         """Special characters in CWD basename should be stripped."""

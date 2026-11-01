@@ -25,9 +25,7 @@ class TestParseWindowTitle:
         assert result["has_attention"] is False
 
     def test_standard_idle(self):
-        result = parse_window_title(
-            "iam-catalog | \u2733 Claude Code", "com.mitchellh.ghostty"
-        )
+        result = parse_window_title("iam-catalog | \u2733 Claude Code", "com.mitchellh.ghostty")
         assert result is not None
         assert result["session_name"] == "iam-catalog"
         assert result["state"] == AgentState.IDLE
@@ -57,9 +55,7 @@ class TestParseWindowTitle:
         assert result["has_attention"] is True
 
     def test_non_claude_session(self):
-        result = parse_window_title(
-            "BoK | jesse@office:~/projects/bok", "com.mitchellh.ghostty"
-        )
+        result = parse_window_title("BoK | jesse@office:~/projects/bok", "com.mitchellh.ghostty")
         assert result is None
 
     def test_no_pipe(self):
@@ -67,15 +63,11 @@ class TestParseWindowTitle:
         assert result is None
 
     def test_non_terminal_class(self):
-        result = parse_window_title(
-            "ge-class | \u2810 Browser Game Implementation", "firefox"
-        )
+        result = parse_window_title("ge-class | \u2810 Browser Game Implementation", "firefox")
         assert result is None
 
     def test_attention_empty_session_name(self):
-        result = parse_window_title(
-            "\U0001f514 | \u2733 Browser Testing", "com.mitchellh.ghostty"
-        )
+        result = parse_window_title("\U0001f514 | \u2733 Browser Testing", "com.mitchellh.ghostty")
         assert result is None
 
 
@@ -133,27 +125,29 @@ class TestV2Models:
         assert run.launch == {}
 
     def test_host_snapshot_round_trip(self):
-        snapshot = HostSnapshot.from_dict({
-            "host": {"name": "workstation", "transport": "ssh", "hyprland": True},
-            "worktrees": [
-                {
-                    "id": "project::branch",
-                    "project": "project",
-                    "branch": "branch",
-                    "path": "/repo/.worktrees/branch",
-                }
-            ],
-            "agent_runs": [
-                {
-                    "id": "project::branch::main",
-                    "worktree_id": "project::branch",
-                    "client": "claude",
-                    "status": "idle",
-                    "title": "Claude Code",
-                    "model": "Sonnet",
-                }
-            ],
-        })
+        snapshot = HostSnapshot.from_dict(
+            {
+                "host": {"name": "workstation", "transport": "ssh", "hyprland": True},
+                "worktrees": [
+                    {
+                        "id": "project::branch",
+                        "project": "project",
+                        "branch": "branch",
+                        "path": "/repo/.worktrees/branch",
+                    }
+                ],
+                "agent_runs": [
+                    {
+                        "id": "project::branch::main",
+                        "worktree_id": "project::branch",
+                        "client": "claude",
+                        "status": "idle",
+                        "title": "Claude Code",
+                        "model": "Sonnet",
+                    }
+                ],
+            }
+        )
 
         data = snapshot.to_dict()
 

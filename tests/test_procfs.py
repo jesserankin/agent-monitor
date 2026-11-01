@@ -28,11 +28,18 @@ class TestReadEnvironVar:
         proc_dir.mkdir(parents=True)
         (proc_dir / "environ").write_bytes(environ)
 
-        with patch("agent_monitor.procfs.Path", side_effect=lambda p: Path(str(p).replace("/proc/", str(tmp_path / "proc") + "/"))):
+        with patch(
+            "agent_monitor.procfs.Path",
+            side_effect=lambda p: Path(str(p).replace("/proc/", str(tmp_path / "proc") + "/")),
+        ):
             pass
 
         # Direct test using real file
-        result = _read_environ_var.__wrapped__(123, "ZELLIJ_SESSION_NAME") if hasattr(_read_environ_var, "__wrapped__") else None
+        result = (
+            _read_environ_var.__wrapped__(123, "ZELLIJ_SESSION_NAME")
+            if hasattr(_read_environ_var, "__wrapped__")
+            else None
+        )
         # Since we can't easily mock Path constructor, test the logic directly
         assert environ.split(b"\0")[1] == b"ZELLIJ_SESSION_NAME=my-session"
 
@@ -100,6 +107,7 @@ class TestFindZellijClientPid:
             if pid == 100:
                 return [200]
             return []
+
         mock_children.side_effect = children
         mock_name.side_effect = lambda pid: {100: "bash", 200: "zellij"}.get(pid)
 
@@ -152,8 +160,16 @@ class TestFindClaudeProcesses:
     @patch("os.listdir")
     def test_finds_claude_procs(self, mock_listdir, mock_name, mock_cwd, mock_ancestor):
         mock_listdir.return_value = ["1", "100", "200", "300"]
-        mock_name.side_effect = lambda pid: {1: "init", 100: "claude", 200: "bash", 300: "claude"}.get(pid)
-        mock_cwd.side_effect = lambda pid: {100: "/home/user/project-a", 300: "/home/user/project-b"}.get(pid)
+        mock_name.side_effect = lambda pid: {
+            1: "init",
+            100: "claude",
+            200: "bash",
+            300: "claude",
+        }.get(pid)
+        mock_cwd.side_effect = lambda pid: {
+            100: "/home/user/project-a",
+            300: "/home/user/project-b",
+        }.get(pid)
         mock_ancestor.side_effect = lambda pid: {100: "erudite-zebra", 300: "fancy-fox"}.get(pid)
 
         results = find_claude_processes()
@@ -194,9 +210,13 @@ class TestFindCodexProcesses:
     @patch("agent_monitor.procfs._read_cmdline")
     @patch("agent_monitor.procfs._process_name")
     @patch("os.listdir")
-    def test_finds_codex_procs(self, mock_listdir, mock_name, mock_cmdline, mock_cwd, mock_ancestor):
+    def test_finds_codex_procs(
+        self, mock_listdir, mock_name, mock_cmdline, mock_cwd, mock_ancestor
+    ):
         mock_listdir.return_value = ["1", "100", "200", "300"]
-        mock_name.side_effect = lambda pid: {1: "init", 100: "codex", 200: "bash", 300: "node"}.get(pid)
+        mock_name.side_effect = lambda pid: {1: "init", 100: "codex", 200: "bash", 300: "node"}.get(
+            pid
+        )
         mock_cmdline.side_effect = lambda pid: {
             100: ["codex", "--cd", ".worktrees/a"],
             200: ["bash"],

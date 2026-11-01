@@ -10,15 +10,19 @@ from agent_monitor.registry import read_overlay_agent_runs
 
 
 def _write_devtools_registry(path, worktree_path="/repo/project/.worktrees/branch"):
-    path.write_text(json.dumps({
-        "instances": {
-            "project::branch": {
-                "branch": "branch",
-                "worktree_path": worktree_path,
-                "project_root": "/repo/project",
+    path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::branch": {
+                        "branch": "branch",
+                        "worktree_path": worktree_path,
+                        "project_root": "/repo/project",
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
 
 
 def test_open_run_cli_resolves_worktree_id_to_default_codex_run(tmp_path, capsys, monkeypatch):
@@ -33,15 +37,17 @@ def test_open_run_cli_resolves_worktree_id_to_default_codex_run(tmp_path, capsys
 
     monkeypatch.setattr("agent_monitor.hosts.attach_session", fake_attach)
 
-    main([
-        "open-run",
-        "project::branch",
-        "--json",
-        "--devtools-registry",
-        str(registry_path),
-        "--overlay",
-        str(overlay_path),
-    ])
+    main(
+        [
+            "open-run",
+            "project::branch",
+            "--json",
+            "--devtools-registry",
+            str(registry_path),
+            "--overlay",
+            str(overlay_path),
+        ]
+    )
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
@@ -72,21 +78,25 @@ def test_open_run_cli_resolves_worktree_id_to_default_codex_run(tmp_path, capsys
     ]
 
 
-def test_open_run_cli_resolves_default_run_id_for_worktree_without_overlay(tmp_path, capsys, monkeypatch):
+def test_open_run_cli_resolves_default_run_id_for_worktree_without_overlay(
+    tmp_path, capsys, monkeypatch
+):
     registry_path = tmp_path / "instances.json"
     overlay_path = tmp_path / "sessions.json"
     _write_devtools_registry(registry_path)
     monkeypatch.setattr("agent_monitor.hosts.attach_session", lambda *_args, **_kwargs: True)
 
-    main([
-        "open-run",
-        "project::branch::main",
-        "--json",
-        "--devtools-registry",
-        str(registry_path),
-        "--overlay",
-        str(overlay_path),
-    ])
+    main(
+        [
+            "open-run",
+            "project::branch::main",
+            "--json",
+            "--devtools-registry",
+            str(registry_path),
+            "--overlay",
+            str(overlay_path),
+        ]
+    )
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
@@ -94,21 +104,27 @@ def test_open_run_cli_resolves_default_run_id_for_worktree_without_overlay(tmp_p
     assert payload["run"]["id"] == "project::branch::main"
 
 
-def test_open_run_cli_uses_existing_default_run_for_bare_worktree_target(tmp_path, capsys, monkeypatch):
+def test_open_run_cli_uses_existing_default_run_for_bare_worktree_target(
+    tmp_path, capsys, monkeypatch
+):
     registry_path = tmp_path / "instances.json"
     overlay_path = tmp_path / "sessions.json"
     _write_devtools_registry(registry_path)
-    overlay_path.write_text(json.dumps({
-        "agent_runs": {
-            "project::branch::main": {
-                "worktree_id": "project::branch",
-                "client": "codex",
-                "workspace_group": 4,
-                "zellij_session": "saved-session",
-                "cwd": "/repo/project/.worktrees/branch",
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "agent_runs": {
+                    "project::branch::main": {
+                        "worktree_id": "project::branch",
+                        "client": "codex",
+                        "workspace_group": 4,
+                        "zellij_session": "saved-session",
+                        "cwd": "/repo/project/.worktrees/branch",
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
     attached = []
 
     def fake_attach(session_name, **kwargs):
@@ -117,15 +133,17 @@ def test_open_run_cli_uses_existing_default_run_for_bare_worktree_target(tmp_pat
 
     monkeypatch.setattr("agent_monitor.hosts.attach_session", fake_attach)
 
-    main([
-        "open-run",
-        "project::branch",
-        "--json",
-        "--devtools-registry",
-        str(registry_path),
-        "--overlay",
-        str(overlay_path),
-    ])
+    main(
+        [
+            "open-run",
+            "project::branch",
+            "--json",
+            "--devtools-registry",
+            str(registry_path),
+            "--overlay",
+            str(overlay_path),
+        ]
+    )
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
@@ -146,7 +164,9 @@ def test_open_run_cli_uses_existing_default_run_for_bare_worktree_target(tmp_pat
     ]
 
 
-def test_open_run_cli_no_attach_ensures_session_without_opening_terminal(tmp_path, capsys, monkeypatch):
+def test_open_run_cli_no_attach_ensures_session_without_opening_terminal(
+    tmp_path, capsys, monkeypatch
+):
     registry_path = tmp_path / "instances.json"
     overlay_path = tmp_path / "sessions.json"
     _write_devtools_registry(registry_path)
@@ -160,16 +180,18 @@ def test_open_run_cli_no_attach_ensures_session_without_opening_terminal(tmp_pat
     monkeypatch.setattr("agent_monitor.hosts.ensure_session", fake_ensure)
     monkeypatch.setattr("agent_monitor.hosts.attach_session", lambda *_args, **_kwargs: False)
 
-    main([
-        "open-run",
-        "project::branch",
-        "--json",
-        "--no-attach",
-        "--devtools-registry",
-        str(registry_path),
-        "--overlay",
-        str(overlay_path),
-    ])
+    main(
+        [
+            "open-run",
+            "project::branch",
+            "--json",
+            "--no-attach",
+            "--devtools-registry",
+            str(registry_path),
+            "--overlay",
+            str(overlay_path),
+        ]
+    )
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
@@ -183,16 +205,18 @@ def test_set_group_cli_resolves_worktree_id_and_persists_default_run(tmp_path, c
     overlay_path = tmp_path / "sessions.json"
     _write_devtools_registry(registry_path)
 
-    main([
-        "set-group",
-        "project::branch",
-        "7",
-        "--json",
-        "--devtools-registry",
-        str(registry_path),
-        "--overlay",
-        str(overlay_path),
-    ])
+    main(
+        [
+            "set-group",
+            "project::branch",
+            "7",
+            "--json",
+            "--devtools-registry",
+            str(registry_path),
+            "--overlay",
+            str(overlay_path),
+        ]
+    )
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
@@ -213,16 +237,18 @@ def test_set_group_cli_returns_json_error_for_invalid_group(tmp_path, capsys):
     _write_devtools_registry(registry_path)
 
     with pytest.raises(SystemExit) as exc_info:
-        main([
-            "set-group",
-            "project::branch",
-            "10",
-            "--json",
-            "--devtools-registry",
-            str(registry_path),
-            "--overlay",
-            str(overlay_path),
-        ])
+        main(
+            [
+                "set-group",
+                "project::branch",
+                "10",
+                "--json",
+                "--devtools-registry",
+                str(registry_path),
+                "--overlay",
+                str(overlay_path),
+            ]
+        )
 
     assert exc_info.value.code == 1
     payload = json.loads(capsys.readouterr().out)
@@ -243,15 +269,17 @@ def test_open_run_cli_returns_json_error_for_unknown_target(tmp_path, capsys):
     _write_devtools_registry(registry_path)
 
     with pytest.raises(SystemExit) as exc_info:
-        main([
-            "open-run",
-            "missing::branch",
-            "--json",
-            "--devtools-registry",
-            str(registry_path),
-            "--overlay",
-            str(overlay_path),
-        ])
+        main(
+            [
+                "open-run",
+                "missing::branch",
+                "--json",
+                "--devtools-registry",
+                str(registry_path),
+                "--overlay",
+                str(overlay_path),
+            ]
+        )
 
     assert exc_info.value.code == 1
     payload = json.loads(capsys.readouterr().out)
@@ -275,25 +303,29 @@ def test_codex_cli_infers_worktree_and_default_run_from_cwd(tmp_path, monkeypatc
     monkeypatch.setattr("agent_monitor.app.run_codex_sidecar", fake_sidecar)
 
     with pytest.raises(SystemExit) as exc_info:
-        main([
-            "codex",
-            "--devtools-registry",
-            str(registry_path),
-        ])
+        main(
+            [
+                "codex",
+                "--devtools-registry",
+                str(registry_path),
+            ]
+        )
 
     assert exc_info.value.code == 0
-    assert calls == [{
-        "run_id": "project::branch::main",
-        "worktree_id": "project::branch",
-        "cwd": str(worktree_path),
-        "zellij_session": "project-branch",
-        "codex_thread_id": None,
-        "runs_dir": None,
-        "status_path": None,
-        "heartbeat_interval": 5.0,
-        "cleanup_stopped_status": False,
-        "command": ["codex", "--cd", str(worktree_path)],
-    }]
+    assert calls == [
+        {
+            "run_id": "project::branch::main",
+            "worktree_id": "project::branch",
+            "cwd": str(worktree_path),
+            "zellij_session": "project-branch",
+            "codex_thread_id": None,
+            "runs_dir": None,
+            "status_path": None,
+            "heartbeat_interval": 5.0,
+            "cleanup_stopped_status": False,
+            "command": ["codex", "--cd", str(worktree_path)],
+        }
+    ]
 
 
 def test_codex_cli_supports_named_run_and_custom_args(tmp_path, monkeypatch):
@@ -305,21 +337,25 @@ def test_codex_cli_supports_named_run_and_custom_args(tmp_path, monkeypatch):
 
     monkeypatch.chdir(worktree_path)
     monkeypatch.delenv("ZELLIJ_SESSION_NAME", raising=False)
-    monkeypatch.setattr("agent_monitor.app.run_codex_sidecar", lambda **kwargs: calls.append(kwargs) or 0)
+    monkeypatch.setattr(
+        "agent_monitor.app.run_codex_sidecar", lambda **kwargs: calls.append(kwargs) or 0
+    )
 
     with pytest.raises(SystemExit):
-        main([
-            "codex",
-            "--run-name",
-            "review",
-            "--codex-thread-id",
-            "thread-123",
-            "--devtools-registry",
-            str(registry_path),
-            "--",
-            "--model",
-            "gpt-5.5",
-        ])
+        main(
+            [
+                "codex",
+                "--run-name",
+                "review",
+                "--codex-thread-id",
+                "thread-123",
+                "--devtools-registry",
+                str(registry_path),
+                "--",
+                "--model",
+                "gpt-5.5",
+            ]
+        )
 
     assert calls[0]["run_id"] == "project::branch::review"
     assert calls[0]["worktree_id"] == "project::branch"
@@ -333,14 +369,18 @@ def test_codex_cli_cleans_up_non_devtools_manual_run_by_default(tmp_path, monkey
     calls = []
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("agent_monitor.app.run_codex_sidecar", lambda **kwargs: calls.append(kwargs) or 0)
+    monkeypatch.setattr(
+        "agent_monitor.app.run_codex_sidecar", lambda **kwargs: calls.append(kwargs) or 0
+    )
 
     with pytest.raises(SystemExit) as exc_info:
-        main([
-            "codex",
-            "--run-id",
-            "agent-monitor",
-        ])
+        main(
+            [
+                "codex",
+                "--run-id",
+                "agent-monitor",
+            ]
+        )
 
     assert exc_info.value.code == 0
     assert calls[0]["run_id"] == "agent-monitor"
@@ -352,15 +392,19 @@ def test_codex_cli_keep_status_disables_ephemeral_cleanup(tmp_path, monkeypatch)
     calls = []
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("agent_monitor.app.run_codex_sidecar", lambda **kwargs: calls.append(kwargs) or 0)
+    monkeypatch.setattr(
+        "agent_monitor.app.run_codex_sidecar", lambda **kwargs: calls.append(kwargs) or 0
+    )
 
     with pytest.raises(SystemExit):
-        main([
-            "codex",
-            "--run-id",
-            "agent-monitor",
-            "--keep-status",
-        ])
+        main(
+            [
+                "codex",
+                "--run-id",
+                "agent-monitor",
+                "--keep-status",
+            ]
+        )
 
     assert calls[0]["cleanup_stopped_status"] is False
 
@@ -371,11 +415,13 @@ def test_codex_cli_errors_when_worktree_cannot_be_inferred(tmp_path, monkeypatch
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(SystemExit) as exc_info:
-        main([
-            "codex",
-            "--devtools-registry",
-            str(registry_path),
-        ])
+        main(
+            [
+                "codex",
+                "--devtools-registry",
+                str(registry_path),
+            ]
+        )
 
     assert exc_info.value.code == 2
     assert "could not infer worktree id" in capsys.readouterr().err

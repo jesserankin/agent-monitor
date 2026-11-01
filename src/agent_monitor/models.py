@@ -94,16 +94,18 @@ class ClientTelemetry:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return _without_none({
-            "title": self.title,
-            "model": self.model,
-            "tokens_used": self.tokens_used,
-            "updated_at_ms": self.updated_at_ms,
-            "active_since_ms": self.active_since_ms,
-            "heartbeat_at_ms": self.heartbeat_at_ms,
-            "context_used_pct": self.context_used_pct,
-            "cost_usd": self.cost_usd,
-        })
+        return _without_none(
+            {
+                "title": self.title,
+                "model": self.model,
+                "tokens_used": self.tokens_used,
+                "updated_at_ms": self.updated_at_ms,
+                "active_since_ms": self.active_since_ms,
+                "heartbeat_at_ms": self.heartbeat_at_ms,
+                "context_used_pct": self.context_used_pct,
+                "cost_usd": self.cost_usd,
+            }
+        )
 
 
 @dataclass
@@ -156,18 +158,20 @@ class Worktree:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return _without_none({
-            "id": self.id,
-            "project": self.project,
-            "branch": self.branch,
-            "path": self.path,
-            "project_root": self.project_root,
-            "port": self.port,
-            "tidewave_port": self.tidewave_port,
-            "mcp_name": self.mcp_name,
-            "containerized": self.containerized,
-            "created_at": self.created_at,
-        })
+        return _without_none(
+            {
+                "id": self.id,
+                "project": self.project,
+                "branch": self.branch,
+                "path": self.path,
+                "project_root": self.project_root,
+                "port": self.port,
+                "tidewave_port": self.tidewave_port,
+                "mcp_name": self.mcp_name,
+                "containerized": self.containerized,
+                "created_at": self.created_at,
+            }
+        )
 
 
 @dataclass
@@ -231,18 +235,20 @@ class AgentRun:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        data = _without_none({
-            "id": self.id,
-            "worktree_id": self.worktree_id,
-            "client": self.client.value,
-            "status": self.status.value,
-            "workspace_group": self.workspace_group,
-            "zellij_session": self.zellij_session,
-            "agent_pane": self.agent_pane,
-            "cwd": self.cwd,
-            "client_ids": self.client_ids or None,
-            "launch": self.launch or None,
-        })
+        data = _without_none(
+            {
+                "id": self.id,
+                "worktree_id": self.worktree_id,
+                "client": self.client.value,
+                "status": self.status.value,
+                "workspace_group": self.workspace_group,
+                "zellij_session": self.zellij_session,
+                "agent_pane": self.agent_pane,
+                "cwd": self.cwd,
+                "client_ids": self.client_ids or None,
+                "launch": self.launch or None,
+            }
+        )
         telemetry = self.telemetry.to_dict()
         if telemetry:
             data["telemetry"] = telemetry

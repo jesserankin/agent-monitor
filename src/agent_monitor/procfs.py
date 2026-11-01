@@ -144,7 +144,9 @@ def _build_zellij_socket_map() -> dict[int, str]:
     try:
         result = subprocess.run(
             ["ss", "-xpn"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0:
             for line in result.stdout.splitlines():
@@ -209,11 +211,13 @@ def find_claude_processes() -> list[dict]:
         cwd = _read_cwd(pid)
         zellij_session = _find_ancestor_zellij_session(pid)
 
-        results.append({
-            "pid": pid,
-            "cwd": cwd,
-            "zellij_session_name": zellij_session,
-        })
+        results.append(
+            {
+                "pid": pid,
+                "cwd": cwd,
+                "zellij_session_name": zellij_session,
+            }
+        )
 
     return results
 
@@ -240,13 +244,15 @@ def find_codex_processes() -> list[dict]:
         cwd = _extract_codex_cwd(argv, process_cwd)
         zellij_session = _find_ancestor_zellij_session(pid)
 
-        results.append({
-            "pid": pid,
-            "cwd": cwd,
-            "process_cwd": process_cwd,
-            "argv": argv,
-            "zellij_session_name": zellij_session,
-        })
+        results.append(
+            {
+                "pid": pid,
+                "cwd": cwd,
+                "process_cwd": process_cwd,
+                "argv": argv,
+                "zellij_session_name": zellij_session,
+            }
+        )
 
     return results
 

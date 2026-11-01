@@ -30,7 +30,8 @@ class TestSwitchToGroup:
             await switch_to_group(5)
 
         mock_exec.assert_called_once_with(
-            "workspace-group", "5",
+            "workspace-group",
+            "5",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -103,7 +104,10 @@ class TestFocusWindow:
             await focus_window("abc123")
 
         mock_exec.assert_called_once_with(
-            "hyprctl", "dispatch", "focuswindow", "address:0xabc123",
+            "hyprctl",
+            "dispatch",
+            "focuswindow",
+            "address:0xabc123",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

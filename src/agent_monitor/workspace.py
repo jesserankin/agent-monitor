@@ -38,7 +38,8 @@ async def switch_to_group(group: int) -> None:
     proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            "workspace-group", str(group),
+            "workspace-group",
+            str(group),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -56,7 +57,9 @@ async def switch_to_group(group: int) -> None:
     if proc.returncode != 0:
         logger.warning(
             "workspace-group %d exited with code %d: %s",
-            group, proc.returncode, stderr.decode(),
+            group,
+            proc.returncode,
+            stderr.decode(),
         )
 
 
@@ -142,7 +145,10 @@ async def focus_window(address: str) -> None:
     proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            "hyprctl", "dispatch", "focuswindow", f"address:0x{address}",
+            "hyprctl",
+            "dispatch",
+            "focuswindow",
+            f"address:0x{address}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -160,7 +166,8 @@ async def focus_window(address: str) -> None:
     if proc.returncode != 0:
         logger.warning(
             "hyprctl dispatch focuswindow exited with code %d: %s",
-            proc.returncode, stderr.decode(),
+            proc.returncode,
+            stderr.decode(),
         )
 
 

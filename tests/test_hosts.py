@@ -67,7 +67,10 @@ def test_local_host_adapter_uses_persisted_launch_command_for_new_session(tmp_pa
     with patch("agent_monitor.hosts.attach_session", return_value=True) as mock_attach:
         assert adapter.open_run(run) is True
 
-    assert mock_attach.call_args.kwargs["launch_argv"] == ["claude", "--dangerously-skip-permissions"]
+    assert mock_attach.call_args.kwargs["launch_argv"] == [
+        "claude",
+        "--dangerously-skip-permissions",
+    ]
 
 
 def test_local_host_adapter_wraps_persisted_codex_launch_command(tmp_path):
@@ -146,19 +149,23 @@ def test_local_host_adapter_launches_codex_in_devcontainer_for_containerized_wor
     devcontainer_dir = project_root / ".devcontainer"
     devcontainer_dir.mkdir(parents=True)
     worktree_path.mkdir(parents=True)
-    (devcontainer_dir / "devcontainer.json").write_text(json.dumps({
-        "workspaceFolder": "/workspace"
-    }))
-    registry_path.write_text(json.dumps({
-        "instances": {
-            "project::branch": {
-                "branch": "branch",
-                "worktree_path": str(worktree_path),
-                "project_root": str(project_root),
-                "containerized": True,
+    (devcontainer_dir / "devcontainer.json").write_text(
+        json.dumps({"workspaceFolder": "/workspace"})
+    )
+    registry_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::branch": {
+                        "branch": "branch",
+                        "worktree_path": str(worktree_path),
+                        "project_root": str(project_root),
+                        "containerized": True,
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
     adapter = LocalHostAdapter(devtools_registry_path=registry_path, overlay_path=overlay_path)
     run = AgentRun(
         id="project::branch::main",
@@ -167,8 +174,10 @@ def test_local_host_adapter_launches_codex_in_devcontainer_for_containerized_wor
         cwd=str(worktree_path),
     )
 
-    with patch("agent_monitor.hosts.subprocess.run") as mock_run, \
-         patch("agent_monitor.hosts.attach_session", return_value=True) as mock_attach:
+    with (
+        patch("agent_monitor.hosts.subprocess.run") as mock_run,
+        patch("agent_monitor.hosts.attach_session", return_value=True) as mock_attach,
+    ):
         assert adapter.open_run(run) is True
 
     mock_run.assert_called_once_with(
@@ -206,16 +215,20 @@ def test_local_host_adapter_fails_devcontainer_run_when_container_cannot_start(t
     overlay_path = tmp_path / "sessions.json"
     project_root = tmp_path / "project"
     worktree_path = project_root / ".worktrees" / "branch"
-    registry_path.write_text(json.dumps({
-        "instances": {
-            "project::branch": {
-                "branch": "branch",
-                "worktree_path": str(worktree_path),
-                "project_root": str(project_root),
-                "containerized": True,
+    registry_path.write_text(
+        json.dumps(
+            {
+                "instances": {
+                    "project::branch": {
+                        "branch": "branch",
+                        "worktree_path": str(worktree_path),
+                        "project_root": str(project_root),
+                        "containerized": True,
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
     adapter = LocalHostAdapter(devtools_registry_path=registry_path, overlay_path=overlay_path)
     run = AgentRun(
         id="project::branch::main",
@@ -224,8 +237,10 @@ def test_local_host_adapter_fails_devcontainer_run_when_container_cannot_start(t
         cwd=str(worktree_path),
     )
 
-    with patch("agent_monitor.hosts.subprocess.run", side_effect=OSError("missing")), \
-         patch("agent_monitor.hosts.attach_session") as mock_attach:
+    with (
+        patch("agent_monitor.hosts.subprocess.run", side_effect=OSError("missing")),
+        patch("agent_monitor.hosts.attach_session") as mock_attach,
+    ):
         assert adapter.open_run(run) is False
 
     mock_attach.assert_not_called()
@@ -265,8 +280,10 @@ def test_local_host_adapter_ensure_run_session_creates_missing_saved_session(tmp
         cwd="/repo/project/.worktrees/branch",
     )
 
-    with patch("agent_monitor.hosts.list_sessions", return_value=[]), \
-         patch("agent_monitor.hosts.ensure_session", return_value=True) as mock_ensure:
+    with (
+        patch("agent_monitor.hosts.list_sessions", return_value=[]),
+        patch("agent_monitor.hosts.ensure_session", return_value=True) as mock_ensure,
+    ):
         updated = adapter.ensure_run_session(run)
 
     assert updated == run
@@ -307,11 +324,16 @@ def test_local_host_adapter_focuses_existing_zellij_window_instead_of_duplicate_
         cwd="/repo/project/.worktrees/branch",
     )
 
-    with patch("agent_monitor.hosts.find_zellij_window_sync", return_value={"address": "abc123", "workspace_id": 11}), \
-         patch("agent_monitor.hosts.switch_to_group_sync", return_value=True) as mock_switch, \
-         patch("agent_monitor.hosts.move_window_to_workspace", return_value=True) as mock_move, \
-         patch("agent_monitor.hosts.focus_window_sync", return_value=True) as mock_focus, \
-         patch("agent_monitor.hosts.attach_session") as mock_attach:
+    with (
+        patch(
+            "agent_monitor.hosts.find_zellij_window_sync",
+            return_value={"address": "abc123", "workspace_id": 11},
+        ),
+        patch("agent_monitor.hosts.switch_to_group_sync", return_value=True) as mock_switch,
+        patch("agent_monitor.hosts.move_window_to_workspace", return_value=True) as mock_move,
+        patch("agent_monitor.hosts.focus_window_sync", return_value=True) as mock_focus,
+        patch("agent_monitor.hosts.attach_session") as mock_attach,
+    ):
         assert adapter.open_run(run) is True
 
     assert adapter.last_open_action == "focused_existing_window"
@@ -332,8 +354,13 @@ def test_local_host_adapter_set_group_moves_existing_zellij_window(tmp_path):
         cwd="/repo/project/.worktrees/branch",
     )
 
-    with patch("agent_monitor.hosts.find_zellij_window_sync", return_value={"address": "abc123", "workspace_id": 11}), \
-         patch("agent_monitor.hosts.move_window_to_workspace", return_value=True) as mock_move:
+    with (
+        patch(
+            "agent_monitor.hosts.find_zellij_window_sync",
+            return_value={"address": "abc123", "workspace_id": 11},
+        ),
+        patch("agent_monitor.hosts.move_window_to_workspace", return_value=True) as mock_move,
+    ):
         updated = adapter.set_workspace_group(run, 5)
 
     assert updated.workspace_group == 5
@@ -351,20 +378,22 @@ class FakeSshTransport:
 
 
 def test_ssh_host_adapter_reads_remote_snapshot_with_configured_host_identity():
-    transport = FakeSshTransport([
-        {
-            "host": {"name": "actual-hostname", "transport": "local", "hyprland": True},
-            "worktrees": [
-                {
-                    "id": "project::branch",
-                    "project": "project",
-                    "branch": "branch",
-                    "path": "/repo/.worktrees/branch",
-                }
-            ],
-            "agent_runs": [],
-        }
-    ])
+    transport = FakeSshTransport(
+        [
+            {
+                "host": {"name": "actual-hostname", "transport": "local", "hyprland": True},
+                "worktrees": [
+                    {
+                        "id": "project::branch",
+                        "project": "project",
+                        "branch": "branch",
+                        "path": "/repo/.worktrees/branch",
+                    }
+                ],
+                "agent_runs": [],
+            }
+        ]
+    )
     adapter = SshHostAdapter(
         RemoteHostConfig(name="workstation", host="jesse@workstation.local"),
         transport=transport,
@@ -380,20 +409,26 @@ def test_ssh_host_adapter_reads_remote_snapshot_with_configured_host_identity():
 
 
 def test_ssh_host_adapter_set_group_delegates_to_remote_helper():
-    transport = FakeSshTransport([
-        {
-            "ok": True,
-            "command": "set-group",
-            "run": {
-                "id": "project::branch::main",
-                "worktree_id": "project::branch",
-                "client": "codex",
-                "workspace_group": 8,
-            },
-        }
-    ])
-    adapter = SshHostAdapter(RemoteHostConfig(name="workstation", host="ssh-host"), transport=transport)
-    run = AgentRun(id="project::branch::main", worktree_id="project::branch", client=ClientName.CODEX)
+    transport = FakeSshTransport(
+        [
+            {
+                "ok": True,
+                "command": "set-group",
+                "run": {
+                    "id": "project::branch::main",
+                    "worktree_id": "project::branch",
+                    "client": "codex",
+                    "workspace_group": 8,
+                },
+            }
+        ]
+    )
+    adapter = SshHostAdapter(
+        RemoteHostConfig(name="workstation", host="ssh-host"), transport=transport
+    )
+    run = AgentRun(
+        id="project::branch::main", worktree_id="project::branch", client=ClientName.CODEX
+    )
 
     updated = adapter.set_workspace_group(run, 8)
 
@@ -403,22 +438,28 @@ def test_ssh_host_adapter_set_group_delegates_to_remote_helper():
 
 
 def test_ssh_host_adapter_open_run_calls_remote_helper_and_opens_local_ssh_attach():
-    transport = FakeSshTransport([
-        {
-            "ok": True,
-            "command": "open-run",
-            "action": "opened_terminal",
-            "run": {
-                "id": "project::branch::main",
-                "worktree_id": "project::branch",
-                "client": "codex",
-                "workspace_group": 4,
-                "zellij_session": "project-branch",
-            },
-        }
-    ])
-    adapter = SshHostAdapter(RemoteHostConfig(name="workstation", host="ssh-host"), transport=transport)
-    run = AgentRun(id="project::branch::main", worktree_id="project::branch", client=ClientName.CODEX)
+    transport = FakeSshTransport(
+        [
+            {
+                "ok": True,
+                "command": "open-run",
+                "action": "opened_terminal",
+                "run": {
+                    "id": "project::branch::main",
+                    "worktree_id": "project::branch",
+                    "client": "codex",
+                    "workspace_group": 4,
+                    "zellij_session": "project-branch",
+                },
+            }
+        ]
+    )
+    adapter = SshHostAdapter(
+        RemoteHostConfig(name="workstation", host="ssh-host"), transport=transport
+    )
+    run = AgentRun(
+        id="project::branch::main", worktree_id="project::branch", client=ClientName.CODEX
+    )
 
     with patch("agent_monitor.hosts.open_ssh_zellij_attach", return_value=True) as mock_attach:
         assert adapter.open_run(run) is True
@@ -434,14 +475,18 @@ def test_multi_host_adapter_merges_snapshots_and_routes_actions_to_owning_adapte
     local = _StaticAdapter(
         HostSnapshot(
             host=HostInfo(name="local"),
-            worktrees=[Worktree(id="local::branch", project="local", branch="branch", path="/local")],
+            worktrees=[
+                Worktree(id="local::branch", project="local", branch="branch", path="/local")
+            ],
             agent_runs=[local_run],
         )
     )
     remote = _StaticAdapter(
         HostSnapshot(
             host=HostInfo(name="workstation", transport="ssh"),
-            worktrees=[Worktree(id="remote::branch", project="remote", branch="branch", path="/remote")],
+            worktrees=[
+                Worktree(id="remote::branch", project="remote", branch="branch", path="/remote")
+            ],
             agent_runs=[remote_run],
         )
     )
@@ -452,7 +497,10 @@ def test_multi_host_adapter_merges_snapshots_and_routes_actions_to_owning_adapte
     adapter.set_workspace_group(snapshot.agent_runs[1], 7)
 
     assert snapshot.host.name == "local, workstation"
-    assert [run.id for run in snapshot.agent_runs] == ["local::branch::main", "remote::branch::main"]
+    assert [run.id for run in snapshot.agent_runs] == [
+        "local::branch::main",
+        "remote::branch::main",
+    ]
     assert local.opened == []
     assert remote.opened == ["remote::branch::main"]
     assert remote.assigned == [("remote::branch::main", 7)]

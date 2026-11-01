@@ -79,8 +79,16 @@ class CodexTelemetryReader:
         self.cwd = _normalize_cwd(cwd)
         self.thread_id = thread_id
         self.process_pid = process_pid
-        self.state_db_path = Path(state_db_path) if state_db_path is not None else Path.home() / ".codex" / "state_5.sqlite"
-        self.logs_db_path = Path(logs_db_path) if logs_db_path is not None else Path.home() / ".codex" / "logs_2.sqlite"
+        self.state_db_path = (
+            Path(state_db_path)
+            if state_db_path is not None
+            else Path.home() / ".codex" / "state_5.sqlite"
+        )
+        self.logs_db_path = (
+            Path(logs_db_path)
+            if logs_db_path is not None
+            else Path.home() / ".codex" / "logs_2.sqlite"
+        )
         self.recent_limit = recent_limit
 
     def read(self) -> CodexTelemetry | None:
@@ -237,7 +245,9 @@ class _LogEvent:
         return self.ts * 1000 + self.ts_nanos // 1_000_000
 
 
-def _read_log_rows(path: Path, *, thread_id: str | None, process_pids: set[int] | None, limit: int) -> list[sqlite3.Row]:
+def _read_log_rows(
+    path: Path, *, thread_id: str | None, process_pids: set[int] | None, limit: int
+) -> list[sqlite3.Row]:
     with closing(_connect_readonly(path)) as conn:
         if process_pids:
             predicates = " OR ".join("process_uuid LIKE ?" for _pid in process_pids)
@@ -318,7 +328,11 @@ def _row_matches(
     process_uuid_prefixes: set[str] | None,
 ) -> bool:
     process_uuid = _optional_str(row["process_uuid"])
-    if process_uuid_prefixes and process_uuid and any(process_uuid.startswith(prefix) for prefix in process_uuid_prefixes):
+    if (
+        process_uuid_prefixes
+        and process_uuid
+        and any(process_uuid.startswith(prefix) for prefix in process_uuid_prefixes)
+    ):
         body = _optional_str(row["feedback_log_body"]) or ""
         return (
             _optional_str(row["thread_id"]) is not None
@@ -388,7 +402,10 @@ def _status_for_event(event: _LogEvent) -> AgentStatus:
 def _active_since_ms(events: list[_LogEvent]) -> int:
     last_idle_index = -1
     for index, event in enumerate(events):
-        if event.response_event in IDLE_RESPONSE_EVENTS or event.response_event in ERROR_RESPONSE_EVENTS:
+        if (
+            event.response_event in IDLE_RESPONSE_EVENTS
+            or event.response_event in ERROR_RESPONSE_EVENTS
+        ):
             last_idle_index = index
     for event in events[last_idle_index + 1 :]:
         if event.response_event in ACTIVE_RESPONSE_EVENTS or _is_active_turn(event.body):
@@ -440,7 +457,9 @@ def _latest_int_regex_group(events: list[_LogEvent], pattern: re.Pattern[str]) -
     return int(value) if value is not None else None
 
 
-def _latest_context_used_pct(events: list[_LogEvent], *, model: str | None, tokens_used: int | None) -> float | None:
+def _latest_context_used_pct(
+    events: list[_LogEvent], *, model: str | None, tokens_used: int | None
+) -> float | None:
     context_limit = _context_limit_for_model(model)
     if tokens_used is not None and context_limit is not None:
         return _clamp_context_pct(round((tokens_used / context_limit) * 100, 1))
@@ -463,7 +482,10 @@ def _context_limit_for_model(model: str | None) -> int | None:
 
 
 def _is_token_usage_event(event: _LogEvent) -> bool:
-    return event.module_path == "codex_core::session::turn" and "post sampling token usage" in event.body
+    return (
+        event.module_path == "codex_core::session::turn"
+        and "post sampling token usage" in event.body
+    )
 
 
 def _connect_readonly(path: Path) -> sqlite3.Connection:

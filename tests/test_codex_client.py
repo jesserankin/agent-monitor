@@ -3,7 +3,11 @@
 import sqlite3
 from unittest.mock import patch
 
-from agent_monitor.clients.codex import CodexTelemetryReader, read_latest_thread_metadata, read_live_status
+from agent_monitor.clients.codex import (
+    CodexTelemetryReader,
+    read_latest_thread_metadata,
+    read_live_status,
+)
 from agent_monitor.models import AgentStatus
 
 
@@ -140,7 +144,7 @@ def test_maps_response_created_to_active_since_first_active_event(tmp_path):
         ts=12,
         module_path="codex_core::session::turn",
         body=(
-            'turn{model=test-model}:run_sampling_request{cwd=/repo/project}: '
+            "turn{model=test-model}:run_sampling_request{cwd=/repo/project}: "
             "post sampling token usage total_usage_tokens=123 estimated_token_count=50 auto_compact_limit=200"
         ),
     )
@@ -352,8 +356,7 @@ def test_maps_pending_input_to_waiting_input(tmp_path):
         db_path,
         ts=10,
         body=(
-            "turn{model=gpt-5.5}:run_sampling_request{cwd=/repo/project}: "
-            "has_pending_input=true"
+            "turn{model=gpt-5.5}:run_sampling_request{cwd=/repo/project}: has_pending_input=true"
         ),
     )
 
@@ -382,7 +385,9 @@ def test_telemetry_reader_combines_state_metadata_and_live_status(tmp_path):
         body='turn{model=gpt-5.5}:run_sampling_request{cwd=/repo/project}: websocket event: {"type":"response.in_progress"}',
     )
 
-    telemetry = CodexTelemetryReader(cwd="/repo/project", state_db_path=state_db, logs_db_path=logs_db).read()
+    telemetry = CodexTelemetryReader(
+        cwd="/repo/project", state_db_path=state_db, logs_db_path=logs_db
+    ).read()
 
     assert telemetry is not None
     assert telemetry.status == AgentStatus.ACTIVE
@@ -460,7 +465,9 @@ def test_telemetry_reader_locks_thread_after_process_match(tmp_path):
         body='turn{model=gpt-5.5}:run_sampling_request{cwd=/repo/project}: websocket event: {"type":"response.completed"}',
     )
 
-    reader = CodexTelemetryReader(cwd="/repo/project", process_pid=222, state_db_path=state_db, logs_db_path=logs_db)
+    reader = CodexTelemetryReader(
+        cwd="/repo/project", process_pid=222, state_db_path=state_db, logs_db_path=logs_db
+    )
     telemetry = reader.read()
 
     assert telemetry is not None

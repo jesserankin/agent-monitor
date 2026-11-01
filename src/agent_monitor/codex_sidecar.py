@@ -33,7 +33,8 @@ def run_codex_sidecar(
     heartbeat_interval: float = 5.0,
     cleanup_stopped_status: bool = False,
     telemetry_reader: Callable[[], CodexTelemetry | None] | None = None,
-    zellij_context_reader: Callable[[str], float | None] | None = read_context_used_pct_from_pane_titles,
+    zellij_context_reader: Callable[[str], float | None]
+    | None = read_context_used_pct_from_pane_titles,
     popen_factory: Callable[..., Any] = subprocess.Popen,
     sleep: Callable[[float], None] = time.sleep,
     now_ms: Callable[[], int] = current_time_ms,
@@ -49,6 +50,7 @@ def run_codex_sidecar(
         runs_dir=runs_dir,
         status_path=status_path,
     )
+
     def write_status(
         status: AgentStatus,
         *,
