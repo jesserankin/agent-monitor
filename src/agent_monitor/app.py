@@ -37,7 +37,6 @@ from agent_monitor.models import (
     Worktree,
 )
 
-SPINNER_FRAMES = list(BRAILLE_SPINNER_CHARS)  # [⠂, ⠐]
 from agent_monitor.registry import read_devtools_worktrees
 from agent_monitor.statusline import StatuslineWatcher
 from agent_monitor.workspace import (
@@ -47,6 +46,7 @@ from agent_monitor.workspace import (
     workspace_id_for_group,
 )
 
+SPINNER_FRAMES = list(BRAILLE_SPINNER_CHARS)  # [⠂, ⠐]
 logger = logging.getLogger(__name__)
 IDLE_RECENT_MS = 10 * 60 * 1000
 

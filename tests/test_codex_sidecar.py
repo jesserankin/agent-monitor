@@ -249,7 +249,7 @@ def test_run_codex_sidecar_treats_clean_interrupt_as_stopped(tmp_path):
         heartbeat_interval=0,
         command=["codex"],
         popen_factory=lambda *_args, **_kwargs: InterruptingProcess(),
-        sleep=lambda _seconds: (_ for _item in ()).throw(KeyboardInterrupt()),
+        sleep=lambda _seconds: (_item for _item in ()).throw(KeyboardInterrupt()),
         now_ms=lambda: 1000,
     )
 

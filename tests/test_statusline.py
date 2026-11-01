@@ -1,10 +1,7 @@
 """Tests for statusline file watcher."""
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock
-
-import pytest
 
 from agent_monitor.statusline import StatuslineWatcher
 

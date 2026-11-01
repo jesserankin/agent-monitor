@@ -9,7 +9,7 @@ import os
 import subprocess
 from collections.abc import Awaitable, Callable
 
-from agent_monitor.models import AgentSession, AgentState, TERMINAL_CLASSES, parse_window_title
+from agent_monitor.models import AgentSession, TERMINAL_CLASSES, parse_window_title
 from agent_monitor.procfs import (
     _build_zellij_socket_map,
     find_claude_processes,

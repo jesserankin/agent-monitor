@@ -5,13 +5,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_monitor.procfs import (
-    _build_zellij_socket_map,
     _extract_codex_cwd,
     _find_ancestor_zellij_session,
     _find_zellij_client_pid,
     _get_child_pids,
     _get_ppid,
-    _get_socket_inodes,
     _process_name,
     _read_cwd,
     _read_environ_var,
@@ -35,7 +33,7 @@ class TestReadEnvironVar:
             pass
 
         # Direct test using real file
-        result = (
+        (
             _read_environ_var.__wrapped__(123, "ZELLIJ_SESSION_NAME")
             if hasattr(_read_environ_var, "__wrapped__")
             else None
