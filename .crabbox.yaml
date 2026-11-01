@@ -1,0 +1,42 @@
+# Crabbox project config for dev-tools remote-lane gates, seeded by devt init/sync.
+# The project owns it: edit and commit it; devt never overwrites it.
+# The router runs `crabbox job run --id <slot> gate|failed` in the lane folder after
+# scripts/crabbox-bootstrap.sh built .venv there (dev-tools docs/remote-lane.md,
+# "Lane boxes for Python projects").
+env:
+  allow:
+    # The router's environment allowlist (dev-tools docs/remote-lane.md § Remote
+    # environment allowlist): every project using the router allows all of them.
+    - INSTANCE_NAME
+    - DEV_TOOLS_GATE_LOCK_DIR
+    - DEV_TOOLS_TOOL_RUNS_LANE
+    - DEV_TOOLS_GATE_MODE
+    - DEV_TOOLS_PRECOMMIT_BASE
+    - DEV_TOOLS_STRUCTURAL_EFFORT
+    - DEV_TOOLS_PLAN
+    - DEV_TOOLS_SNAPSHOT
+    - DEV_TOOLS_TREE_DIGEST
+    - DEV_TOOLS_LANE_TICKET
+    - DEV_TOOLS_LANE_JOB
+    - DEV_TOOLS_GATE_ROWS
+    - DEV_TOOLS_GATE_SCOPE
+    - DEV_TOOLS_GATE_REPEAT
+    - DEV_TOOLS_INHERITED_TESTS
+    - DEV_TOOLS_DEBT_SNAPSHOT
+    - DEV_TOOLS_BASE_RECORD
+
+# The lane reset before each job keeps these untracked paths, so the venv the setup
+# script built survives between gates (it rebuilds when pyproject.toml changes).
+sync:
+  exclude:
+    - .venv
+
+# Local-lane equivalents come from .dev_tools/config.toml (local_gate_cmd and
+# local_failed_cmd); keep them aligned with these commands.
+jobs:
+  gate:
+    shell: true
+    command: ${DEV_TOOLS_LANE_JOB:+bash "$DEV_TOOLS_LANE_JOB" --} scripts/precommit
+  failed:
+    shell: true
+    command: ${DEV_TOOLS_LANE_JOB:+bash "$DEV_TOOLS_LANE_JOB" --} scripts/precommit --lf

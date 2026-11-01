@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# The project's gate, seeded by devt init/sync; the project owns it: edit and commit it.
+# A lane gate runs it (.crabbox.yaml job gate, local_gate_cmd) after
+# scripts/crabbox-bootstrap.sh built .venv. It runs ruff format --check, ruff check and
+# pytest (with this script's arguments) from .venv, every one of them; exit 1 when any
+# failed, 2 without .venv (the gate never ran).
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root" || exit 2
+python="$root/.venv/bin/python"
+
+if [ ! -x "$python" ]; then
+  echo "scripts/precommit: no .venv in $root; create it: python3 -m venv .venv &&" \
+    ".venv/bin/python -m pip install -e '.[dev]' ruff pytest" \
+    "(on a lane box scripts/crabbox-bootstrap.sh builds it)" >&2
+  exit 2
+fi
+
+echo "scripts/precommit: $python $("$python" -c 'import platform; print(platform.python_version())')"
+status=0
+"$python" -m ruff format --check . || status=1
+"$python" -m ruff check . || status=1
+"$python" -m pytest "$@" || status=1
+exit "$status"
